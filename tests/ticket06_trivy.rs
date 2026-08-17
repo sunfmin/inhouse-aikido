@@ -16,15 +16,20 @@ fn trivy_parser_two_manifests_are_two_findings() {
           "Target": "worker/package-lock.json",
           "Vulnerabilities": [
             {"VulnerabilityID":"CVE-2024-1111","PkgName":"lodash","FixedVersion":"4.17.22","InstalledVersion":"4.17.20"}
+          ],
+          "Licenses": [
+            {"Name":"copyleft-lib","FilePath":"worker/package-lock.json","Category":"GPL-3.0"}
           ]
         }
       ]
     }"#;
     let obs = hq::engines::trivy::observations_from_json(raw).unwrap();
-    assert_eq!(obs.len(), 2);
+    assert_eq!(obs.len(), 3);
     assert_eq!(obs[0].location_key, "web/package-lock.json::lodash");
     assert_eq!(obs[1].location_key, "worker/package-lock.json::lodash");
     assert_eq!(obs[0].fixed_version.as_deref(), Some("4.17.22"));
+    assert_eq!(obs[2].kind, hq::domain::FindingKind::License);
+    assert_eq!(obs[2].problem_id, "GPL-3.0");
 }
 
 #[test]
@@ -158,4 +163,55 @@ fn version_bump_same_cve_same_finding() {
         .filter(|l| l.contains("CVE-2024-1111"))
         .count();
     assert_eq!(count, 1, "{findings}");
+}
+
+#[test]
+fn later_scan_without_observation_marks_fixed() {
+    let dir = tempdir().unwrap();
+    let d = dir.path();
+    hq_ok(d, &["enroll", "github", "acme/api", "--revision", "main"]);
+    hq_ok(
+        d,
+        &[
+            "fake-obs",
+            "acme/api",
+            "main",
+            "--engine",
+            "trivy",
+            "--problem",
+            "CVE-1",
+            "--location",
+            "package-lock.json::x",
+            "--kind",
+            "sca",
+        ],
+    );
+    hq_ok(d, &["scan", "acme/api"]);
+    hq_ok(d, &["scan", "acme/api", "--revision", "gone"]);
+    let findings = hq_ok(d, &["findings"]);
+    assert!(findings.contains("state=Fixed"), "{findings}");
+}
+
+#[test]
+#[ignore = "needs trivy binary"]
+fn trivy_real_binary_scan() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lockfile");
+    let dir = tempdir().unwrap();
+    let d = dir.path();
+    hq_ok(d, &["enroll", "github", "lock-demo", "--revision", "main"]);
+    hq_ok(d, &["scan", "lock-demo"]);
+    let out = hq_ok(
+        d,
+        &[
+            "scan",
+            "lock-demo",
+            "--revision",
+            "pr",
+            "--workspace",
+            fixture.to_str().unwrap(),
+            "--use",
+            "trivy",
+        ],
+    );
+    assert!(out.contains("observations="), "{out}");
 }

@@ -22,6 +22,18 @@ pub struct TrivyResult {
     pub misconfigurations: Option<Vec<TrivyMisconfig>>,
     #[serde(default, rename = "Secrets")]
     pub secrets: Option<Vec<TrivySecret>>,
+    #[serde(default, rename = "Licenses")]
+    pub licenses: Option<Vec<TrivyLicense>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TrivyLicense {
+    #[serde(default, rename = "Name", alias = "PkgName")]
+    pub name: Option<String>,
+    #[serde(default, rename = "FilePath")]
+    pub file: Option<String>,
+    #[serde(default, rename = "Category")]
+    pub category: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,6 +102,26 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
                 });
             }
         }
+        if let Some(licenses) = result.licenses {
+            for lic in licenses {
+                let pkg = lic.name.clone().unwrap_or_else(|| "unknown".into());
+                let loc = lic
+                    .file
+                    .as_deref()
+                    .map(|f| dependency_location(f, &pkg))
+                    .unwrap_or_else(|| dependency_location(&manifest, &pkg));
+                out.push(Observation {
+                    engine: "trivy".into(),
+                    problem_id: lic.category.or(lic.name).unwrap_or_else(|| "license".into()),
+                    location_key: loc,
+                    kind: FindingKind::License,
+                    package: Some(pkg),
+                    manifest: Some(manifest.clone()),
+                    fixed_version: None,
+                    message: String::new(),
+                });
+            }
+        }
         let _ = result.secrets;
         let _ = result.class;
     }
@@ -119,6 +151,8 @@ impl Engine for TrivyEngine {
                     .ok_or_else(|| EngineError::Other("trivy fs requires --workspace".into()))?;
                 cmd.args([
                     "fs",
+                    "--scanners",
+                    "vuln,misconfig,license",
                     "--format",
                     "json",
                     "--quiet",

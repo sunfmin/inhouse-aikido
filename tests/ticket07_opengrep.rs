@@ -60,3 +60,28 @@ fn opengrep_line_move_same_finding() {
     let findings = hq_ok(d, &["findings"]);
     assert_eq!(findings.lines().count(), 1, "{findings}");
 }
+
+#[test]
+#[ignore = "needs opengrep binary"]
+fn opengrep_real_binary_scan() {
+    use common::hq_ok;
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sast");
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    hq_ok(d, &["enroll", "github", "sast-demo", "--revision", "main"]);
+    hq_ok(d, &["scan", "sast-demo"]);
+    let out = hq_ok(
+        d,
+        &[
+            "scan",
+            "sast-demo",
+            "--revision",
+            "pr",
+            "--workspace",
+            fixture.to_str().unwrap(),
+            "--use",
+            "opengrep",
+        ],
+    );
+    assert!(out.contains("observations="), "{out}");
+}

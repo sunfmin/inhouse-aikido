@@ -17,6 +17,7 @@ fn gitleaks_parser_location_is_file_not_line() {
 #[test]
 fn gitleaks_fixture_scan_gates_pr_when_binary_present() {
     if !common::binary_on_path("gitleaks") {
+        eprintln!("skip: gitleaks binary not installed");
         return;
     }
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/secrets");

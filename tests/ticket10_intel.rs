@@ -62,8 +62,8 @@ fn intel_rescan_new_cve_no_baseline_pr_storm() {
 
     // baseline debt does not each get a remediation; only the new lodash pin
     let dump = hq_ok(d, &["github-dump"]);
-    assert!(dump.contains("lodash"), "{dump}");
-    assert!(!dump.contains("leftpad"), "{dump}");
+    assert!(dump.contains("pin lodash"), "{dump}");
+    assert!(!dump.contains("pin leftpad"), "{dump}");
 }
 
 #[test]

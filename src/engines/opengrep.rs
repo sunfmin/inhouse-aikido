@@ -62,22 +62,11 @@ impl Engine for OpengrepEngine {
         let dir =
             workspace.ok_or_else(|| EngineError::Other("opengrep requires --workspace".into()))?;
         let out = Command::new("opengrep")
-            .args(["--json", "--quiet", &dir.display().to_string()])
+            .args(["scan", "--json", "--quiet", &dir.display().to_string()])
             .output()
             .map_err(|_| EngineError::Failed("opengrep".into()))?;
         if !out.status.success() && out.stdout.is_empty() {
-            // try semgrep-compatible binary name
-            let out = Command::new("semgrep")
-                .args([
-                    "--config",
-                    "auto",
-                    "--json",
-                    "--quiet",
-                    &dir.display().to_string(),
-                ])
-                .output()
-                .map_err(|_| EngineError::Failed("opengrep".into()))?;
-            return observations_from_json(&String::from_utf8_lossy(&out.stdout));
+            return Err(EngineError::Failed("opengrep".into()));
         }
         observations_from_json(&String::from_utf8_lossy(&out.stdout))
     }

@@ -258,6 +258,9 @@ impl Hq {
         if !t.baseline_ready {
             return 0;
         }
+        if t.kind != TargetKind::Github {
+            return 0;
+        }
         // Group safe pin Findings by (manifest, package, fixed_version)
         let mut groups: std::collections::HashMap<(String, String, String), Vec<Fingerprint>> =
             std::collections::HashMap::new();
@@ -286,7 +289,9 @@ impl Hq {
                 .push(f.fingerprint.clone());
         }
 
+        let default_rev = t.default_revision.0.clone();
         let mut opened = 0;
+        let mut gated: Vec<(u64, Vec<Fingerprint>)> = Vec::new();
         let existing: Vec<(String, String, String)> = self
             .store
             .state
@@ -332,10 +337,14 @@ impl Hq {
                 manifest,
                 package,
                 fixed_version: fixed,
-                finding_fingerprints: fps,
+                finding_fingerprints: fps.clone(),
                 pr_number: pr,
             });
+            gated.push((pr, fps));
             opened += 1;
+        }
+        for (pr, fps) in gated {
+            let _ = self.post_gate(target, pr, &default_rev, false, &fps);
         }
         opened
     }
@@ -437,9 +446,14 @@ impl Hq {
             return Err(format!("not enrolled: {repo}"));
         }
         let engines = self.select_engines(names);
+        if !self.store.state.targets[repo].baseline_ready {
+            return Err("baseline not ready".into());
+        }
         match self.scan_with(repo, Some(head), &engines, workspace, true) {
-            Ok(_) => self.post_gate(repo, pr, head, false),
-            Err(e) if e.starts_with("engines failed") => self.post_gate(repo, pr, head, true),
+            Ok(_) => self.post_gate(repo, pr, head, false, &[]),
+            Err(e) if e.starts_with("engines failed") => {
+                self.post_gate(repo, pr, head, true, &[])
+            }
             Err(e) => Err(e),
         }
     }
@@ -450,6 +464,7 @@ impl Hq {
         pr: u64,
         head: &str,
         engine_failed: bool,
+        ignore: &[Fingerprint],
     ) -> Result<String, String> {
         if engine_failed {
             let check = CheckRun {
@@ -480,6 +495,9 @@ impl Hq {
                 continue;
             }
             if f.last_revision.as_ref() != Some(&head_rev) {
+                continue;
+            }
+            if ignore.iter().any(|i| i == &f.fingerprint) {
                 continue;
             }
             let on_baseline = baseline.iter().any(|b| b == &f.fingerprint);
@@ -552,17 +570,25 @@ impl Hq {
             .and_then(|f| f.last_revision.clone())
             .map(|r| r.0);
         if let Some(head) = head {
-            let _ = self.post_gate(repo, pr, &head, false);
+            let _ = self.post_gate(repo, pr, &head, false, &[]);
         }
         Ok(msg)
     }
 
     pub fn intel_rescan(&mut self) -> Result<String, String> {
+        self.intel_rescan_named(&["fake"], None)
+    }
+
+    pub fn intel_rescan_named(
+        &mut self,
+        engines: &[&str],
+        workspace: Option<&std::path::Path>,
+    ) -> Result<String, String> {
         let names: Vec<String> = self.store.state.targets.keys().cloned().collect();
         let mut out = Vec::new();
         for name in names {
             let rev = self.store.state.targets[&name].default_revision.0.clone();
-            match self.scan(&name, Some(&rev)) {
+            match self.scan_named(&name, Some(&rev), engines, workspace, false) {
                 Ok(m) => out.push(m),
                 Err(e) => out.push(format!("{name}: {e}")),
             }

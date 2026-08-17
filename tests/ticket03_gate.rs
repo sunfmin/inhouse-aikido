@@ -164,6 +164,19 @@ fn gate_fails_only_on_new_open_findings() {
 }
 
 #[test]
+fn gate_refuses_before_baseline() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    hq_ok(d, &["enroll", "github", "acme/api", "--revision", "main"]);
+    let out = common::hq(
+        d,
+        &["handle-pr", "--repo", "acme/api", "--number", "1", "--head", "x", "--base", "main"],
+    );
+    assert!(!out.status.success());
+    assert!(common::stderr(&out).contains("baseline not ready"));
+}
+
+#[test]
 fn gate_fails_closed_when_engines_fail() {
     let dir = tempdir().unwrap();
     let d = dir.path();

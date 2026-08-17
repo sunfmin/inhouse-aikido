@@ -95,7 +95,13 @@ pub enum Cmd {
         #[arg(long)]
         body: String,
     },
-    IntelRescan,
+    IntelRescan {
+        /// Comma-separated Engine names (default fake; pass trivy,gitleaks,opengrep to use them)
+        #[arg(long, default_value = "fake")]
+        r#use: String,
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+    },
     GithubDump,
 }
 
@@ -214,7 +220,10 @@ fn dispatch(hq: &mut Hq, cmd: Cmd) -> Result<String, String> {
             can_write,
             body,
         } => hq.handle_comment(&repo, number, &author, can_write, &body),
-        Cmd::IntelRescan => hq.intel_rescan(),
+        Cmd::IntelRescan { r#use, workspace } => {
+            let names: Vec<&str> = r#use.split(',').map(str::trim).collect();
+            hq.intel_rescan_named(&names, workspace.as_deref())
+        }
         Cmd::GithubDump => Ok(hq.github_dump()),
     }
 }
