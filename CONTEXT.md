@@ -21,11 +21,11 @@ A swappable scanner that examines a Target on our runners and emits Observations
 _Avoid_: scanner, tool, linter, plugin (when you mean an Engine)
 
 **Developer**:
-The person who changes the code a finding is about. They see findings as PR annotations.
+The person who changes the code a Finding is about. They see Findings as PR annotations and can Dismiss them.
 _Avoid_: user, engineer (when you mean this role)
 
 **Operator**:
-The person who configures Engines, rules, and exceptions. They are not the inbox for findings.
+The person who configures Engines and rules, reviews the Dismissed list, and Reopens. They are not the inbox for Findings.
 _Avoid_: admin, security person (when you mean this role)
 
 **HQ**:
@@ -49,8 +49,12 @@ A Finding whose later Scan on that Target no longer produced an Observation.
 _Avoid_: resolved, closed, gone (when you mean Fixed)
 
 **Dismissed**:
-A human decision on a Finding: do not nag this Target for this Fingerprint until someone reopens it.
+A Developer's or Operator's decision on a Finding: do not nag this Target for this Fingerprint, and do not fail the Gate, until someone Reopens it.
 _Avoid_: ignored, accepted, suppressed, wontfix (when you mean Dismissed)
+
+**Reopen**:
+An Operator decision that turns a Dismissed Finding back to Open.
+_Avoid_: restore, unignore, activate
 
 **Observation**:
 One Engine's report that supports a Finding.
