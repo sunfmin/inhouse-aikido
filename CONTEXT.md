@@ -29,8 +29,12 @@ The person who configures Engines and rules, reviews the Dismissed list, and Reo
 _Avoid_: admin, security person (when you mean this role)
 
 **HQ**:
-The long-lived control plane that holds inventory and Findings between scans, and re-scans when Engine intel changes.
+The long-lived control plane that holds inventory and Findings between scans, and re-scans when Engine intel changes. On GitHub it is an App. The Operator talks to it with a CLI.
 _Avoid_: platform, dashboard, backend (when you mean the HQ)
+
+**App**:
+The GitHub App identity HQ uses to annotate PRs, fail the Gate, and open Remediations.
+_Avoid_: bot, token, integration (when you mean the App)
 
 **Finding**:
 One problem on one kind of Target. Two Engines hitting the same lockfile CVE are one Finding; that CVE in the image is another.
