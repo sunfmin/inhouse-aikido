@@ -6,8 +6,12 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(name = "hq", about = "In-house Aikido HQ CLI")]
 pub struct Cli {
-    #[arg(long, env = "HQ_DATA_DIR")]
-    pub data_dir: PathBuf,
+    /// Postgres connection string. Default: local socket, database hq.
+    #[arg(long, env = "HQ_DATABASE_URL", default_value = "host=/tmp dbname=hq")]
+    pub database_url: String,
+    /// Postgres schema (isolated per test; production uses hq).
+    #[arg(long, env = "HQ_SCHEMA", default_value = "hq")]
+    pub schema: String,
     #[command(subcommand)]
     pub cmd: Cmd,
 }
@@ -111,7 +115,7 @@ where
     T: Into<std::ffi::OsString> + Clone,
 {
     let cli = Cli::try_parse_from(args).map_err(|e| e.to_string())?;
-    let mut hq = Hq::open(&cli.data_dir)?;
+    let mut hq = Hq::open(&cli.database_url, &cli.schema)?;
     let out = dispatch(&mut hq, cli.cmd)?;
     hq.save()?;
     Ok(out)

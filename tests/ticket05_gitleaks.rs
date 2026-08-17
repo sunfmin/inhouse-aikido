@@ -1,6 +1,5 @@
 mod common;
 use common::hq_ok;
-use tempfile::tempdir;
 
 #[test]
 fn gitleaks_parser_location_is_file_not_line() {
@@ -21,15 +20,14 @@ fn gitleaks_fixture_scan_gates_pr_when_binary_present() {
         return;
     }
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/secrets");
-    let dir = tempdir().unwrap();
-    let d = dir.path();
+    let ctx = common::Ctx::new();
     hq_ok(
-        d,
+        &ctx,
         &["enroll", "github", "secrets-demo", "--revision", "clean"],
     );
-    hq_ok(d, &["scan", "secrets-demo"]);
+    hq_ok(&ctx, &["scan", "secrets-demo"]);
     let out = hq_ok(
-        d,
+        &ctx,
         &[
             "handle-pr",
             "--repo",

@@ -1,6 +1,5 @@
 mod common;
 use common::hq_ok;
-use tempfile::tempdir;
 
 #[test]
 fn trivy_parser_two_manifests_are_two_findings() {
@@ -18,7 +17,7 @@ fn trivy_parser_two_manifests_are_two_findings() {
             {"VulnerabilityID":"CVE-2024-1111","PkgName":"lodash","FixedVersion":"4.17.22","InstalledVersion":"4.17.20"}
           ],
           "Licenses": [
-            {"Name":"copyleft-lib","FilePath":"worker/package-lock.json","Category":"GPL-3.0"}
+            {"Name":"GPL-3.0","PkgName":"copyleft-lib","FilePath":"worker/package-lock.json","Category":"restricted"}
           ]
         }
       ]
@@ -34,11 +33,10 @@ fn trivy_parser_two_manifests_are_two_findings() {
 
 #[test]
 fn trivy_same_cve_two_lockfiles_via_cli() {
-    let dir = tempdir().unwrap();
-    let d = dir.path();
-    hq_ok(d, &["enroll", "github", "acme/mono", "--revision", "main"]);
+    let ctx = common::Ctx::new();
+    hq_ok(&ctx, &["enroll", "github", "acme/mono", "--revision", "main"]);
     hq_ok(
-        d,
+        &ctx,
         &[
             "fake-obs",
             "acme/mono",
@@ -60,7 +58,7 @@ fn trivy_same_cve_two_lockfiles_via_cli() {
         ],
     );
     hq_ok(
-        d,
+        &ctx,
         &[
             "fake-obs",
             "acme/mono",
@@ -82,7 +80,7 @@ fn trivy_same_cve_two_lockfiles_via_cli() {
         ],
     );
     hq_ok(
-        d,
+        &ctx,
         &[
             "fake-obs",
             "acme/mono",
@@ -97,8 +95,8 @@ fn trivy_same_cve_two_lockfiles_via_cli() {
             "license",
         ],
     );
-    hq_ok(d, &["scan", "acme/mono"]);
-    let findings = hq_ok(d, &["findings"]);
+    hq_ok(&ctx, &["scan", "acme/mono"]);
+    let findings = hq_ok(&ctx, &["findings"]);
     assert!(findings.contains("web/package-lock.json::lodash"));
     assert!(findings.contains("worker/package-lock.json::lodash"));
     assert!(findings.contains("copyleft-lib"));
@@ -111,11 +109,10 @@ fn trivy_same_cve_two_lockfiles_via_cli() {
 
 #[test]
 fn version_bump_same_cve_same_finding() {
-    let dir = tempdir().unwrap();
-    let d = dir.path();
-    hq_ok(d, &["enroll", "github", "acme/api", "--revision", "v1"]);
+    let ctx = common::Ctx::new();
+    hq_ok(&ctx, &["enroll", "github", "acme/api", "--revision", "v1"]);
     hq_ok(
-        d,
+        &ctx,
         &[
             "fake-obs",
             "acme/api",
@@ -134,9 +131,9 @@ fn version_bump_same_cve_same_finding() {
             "package-lock.json",
         ],
     );
-    hq_ok(d, &["scan", "acme/api", "--revision", "v1"]);
+    hq_ok(&ctx, &["scan", "acme/api", "--revision", "v1"]);
     hq_ok(
-        d,
+        &ctx,
         &[
             "fake-obs",
             "acme/api",
@@ -156,8 +153,8 @@ fn version_bump_same_cve_same_finding() {
         ],
     );
     // change default so we scan a new default revision without treating as PR
-    hq_ok(d, &["scan", "acme/api", "--revision", "v2"]);
-    let findings = hq_ok(d, &["findings"]);
+    hq_ok(&ctx, &["scan", "acme/api", "--revision", "v2"]);
+    let findings = hq_ok(&ctx, &["findings"]);
     let count = findings
         .lines()
         .filter(|l| l.contains("CVE-2024-1111"))
@@ -167,11 +164,10 @@ fn version_bump_same_cve_same_finding() {
 
 #[test]
 fn later_scan_without_observation_marks_fixed() {
-    let dir = tempdir().unwrap();
-    let d = dir.path();
-    hq_ok(d, &["enroll", "github", "acme/api", "--revision", "main"]);
+    let ctx = common::Ctx::new();
+    hq_ok(&ctx, &["enroll", "github", "acme/api", "--revision", "main"]);
     hq_ok(
-        d,
+        &ctx,
         &[
             "fake-obs",
             "acme/api",
@@ -186,9 +182,9 @@ fn later_scan_without_observation_marks_fixed() {
             "sca",
         ],
     );
-    hq_ok(d, &["scan", "acme/api"]);
-    hq_ok(d, &["scan", "acme/api", "--revision", "gone"]);
-    let findings = hq_ok(d, &["findings"]);
+    hq_ok(&ctx, &["scan", "acme/api"]);
+    hq_ok(&ctx, &["scan", "acme/api", "--revision", "gone"]);
+    let findings = hq_ok(&ctx, &["findings"]);
     assert!(findings.contains("state=Fixed"), "{findings}");
 }
 
@@ -196,12 +192,11 @@ fn later_scan_without_observation_marks_fixed() {
 #[ignore = "needs trivy binary"]
 fn trivy_real_binary_scan() {
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lockfile");
-    let dir = tempdir().unwrap();
-    let d = dir.path();
-    hq_ok(d, &["enroll", "github", "lock-demo", "--revision", "main"]);
-    hq_ok(d, &["scan", "lock-demo"]);
+    let ctx = common::Ctx::new();
+    hq_ok(&ctx, &["enroll", "github", "lock-demo", "--revision", "main"]);
+    hq_ok(&ctx, &["scan", "lock-demo"]);
     let out = hq_ok(
-        d,
+        &ctx,
         &[
             "scan",
             "lock-demo",

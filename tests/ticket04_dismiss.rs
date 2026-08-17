@@ -1,16 +1,14 @@
 mod common;
 use common::hq_ok;
-use tempfile::tempdir;
 
 #[test]
 fn dismiss_on_pr_reopen_from_cli() {
-    let dir = tempdir().unwrap();
-    let d = dir.path();
-    hq_ok(d, &["enroll", "github", "acme/api", "--revision", "main"]);
-    hq_ok(d, &["scan", "acme/api"]);
+    let ctx = common::Ctx::new();
+    hq_ok(&ctx, &["enroll", "github", "acme/api", "--revision", "main"]);
+    hq_ok(&ctx, &["scan", "acme/api"]);
 
     hq_ok(
-        d,
+        &ctx,
         &[
             "fake-obs",
             "acme/api",
@@ -26,7 +24,7 @@ fn dismiss_on_pr_reopen_from_cli() {
         ],
     );
     let fail = hq_ok(
-        d,
+        &ctx,
         &[
             "handle-pr",
             "--repo",
@@ -42,7 +40,7 @@ fn dismiss_on_pr_reopen_from_cli() {
     assert!(fail.contains("gate=failure"), "{fail}");
 
     let denied = common::hq(
-        d,
+        &ctx,
         &[
             "handle-comment",
             "--repo",
@@ -59,7 +57,7 @@ fn dismiss_on_pr_reopen_from_cli() {
     assert!(common::stderr(&denied).contains("cannot write"));
 
     let dismissed = hq_ok(
-        d,
+        &ctx,
         &[
             "handle-comment",
             "--repo",
@@ -75,12 +73,12 @@ fn dismiss_on_pr_reopen_from_cli() {
     );
     assert!(dismissed.contains("dismissed"), "{dismissed}");
 
-    let list = hq_ok(d, &["dismissed"]);
+    let list = hq_ok(&ctx, &["dismissed"]);
     assert!(list.contains("aws-key"));
 
     // next PR with same secret stays green
     hq_ok(
-        d,
+        &ctx,
         &[
             "fake-obs",
             "acme/api",
@@ -96,7 +94,7 @@ fn dismiss_on_pr_reopen_from_cli() {
         ],
     );
     let stay = hq_ok(
-        d,
+        &ctx,
         &[
             "handle-pr",
             "--repo",
@@ -111,11 +109,11 @@ fn dismiss_on_pr_reopen_from_cli() {
     );
     assert!(stay.contains("gate=success"), "{stay}");
 
-    let reopened = hq_ok(d, &["reopen", "acme/api|aws-key|src/app.rs"]);
+    let reopened = hq_ok(&ctx, &["reopen", "acme/api|aws-key|src/app.rs"]);
     assert!(reopened.contains("reopened"), "{reopened}");
 
     hq_ok(
-        d,
+        &ctx,
         &[
             "fake-obs",
             "acme/api",
@@ -131,7 +129,7 @@ fn dismiss_on_pr_reopen_from_cli() {
         ],
     );
     let again = hq_ok(
-        d,
+        &ctx,
         &[
             "handle-pr",
             "--repo",

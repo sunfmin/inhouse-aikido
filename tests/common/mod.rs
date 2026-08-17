@@ -1,10 +1,43 @@
-use std::path::Path;
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-pub fn hq(dir: &Path, args: &[&str]) -> Output {
+pub const TEST_URL: &str = "host=/tmp dbname=hq_test";
+
+static SEQ: AtomicU64 = AtomicU64::new(1);
+
+pub struct Ctx {
+    pub schema: String,
+}
+
+impl Ctx {
+    pub fn new() -> Self {
+        let schema = format!(
+            "s{}_{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        );
+        let mut c = postgres::Client::connect(TEST_URL, postgres::NoTls)
+            .expect("connect hq_test — is PostgreSQL 18 running on /tmp:5432?");
+        c.batch_execute(&format!("CREATE SCHEMA {schema}"))
+            .expect("create test schema");
+        Self { schema }
+    }
+}
+
+impl Drop for Ctx {
+    fn drop(&mut self) {
+        if let Ok(mut c) = postgres::Client::connect(TEST_URL, postgres::NoTls) {
+            let _ = c.batch_execute(&format!("DROP SCHEMA IF EXISTS {} CASCADE", self.schema));
+        }
+    }
+}
+
+pub fn hq(ctx: &Ctx, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_hq"))
-        .arg("--data-dir")
-        .arg(dir)
+        .arg("--database-url")
+        .arg(TEST_URL)
+        .arg("--schema")
+        .arg(&ctx.schema)
         .args(args)
         .output()
         .expect("run hq")
@@ -18,8 +51,8 @@ pub fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).trim().to_string()
 }
 
-pub fn hq_ok(dir: &Path, args: &[&str]) -> String {
-    let out = hq(dir, args);
+pub fn hq_ok(ctx: &Ctx, args: &[&str]) -> String {
+    let out = hq(ctx, args);
     assert!(
         out.status.success(),
         "hq {args:?} failed: {} {}",

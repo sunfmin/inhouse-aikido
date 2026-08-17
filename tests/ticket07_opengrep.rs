@@ -19,12 +19,10 @@ fn opengrep_parser_uses_source_path() {
 #[test]
 fn opengrep_line_move_same_finding() {
     use common::hq_ok;
-    use tempfile::tempdir;
-    let dir = tempdir().unwrap();
-    let d = dir.path();
-    hq_ok(d, &["enroll", "github", "acme/api", "--revision", "a"]);
+        let ctx = common::Ctx::new();
+    hq_ok(&ctx, &["enroll", "github", "acme/api", "--revision", "a"]);
     hq_ok(
-        d,
+        &ctx,
         &[
             "fake-obs",
             "acme/api",
@@ -39,9 +37,9 @@ fn opengrep_line_move_same_finding() {
             "sast",
         ],
     );
-    hq_ok(d, &["scan", "acme/api"]);
+    hq_ok(&ctx, &["scan", "acme/api"]);
     hq_ok(
-        d,
+        &ctx,
         &[
             "fake-obs",
             "acme/api",
@@ -56,8 +54,8 @@ fn opengrep_line_move_same_finding() {
             "sast",
         ],
     );
-    hq_ok(d, &["scan", "acme/api", "--revision", "b"]);
-    let findings = hq_ok(d, &["findings"]);
+    hq_ok(&ctx, &["scan", "acme/api", "--revision", "b"]);
+    let findings = hq_ok(&ctx, &["findings"]);
     assert_eq!(findings.lines().count(), 1, "{findings}");
 }
 
@@ -66,12 +64,11 @@ fn opengrep_line_move_same_finding() {
 fn opengrep_real_binary_scan() {
     use common::hq_ok;
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sast");
-    let dir = tempfile::tempdir().unwrap();
-    let d = dir.path();
-    hq_ok(d, &["enroll", "github", "sast-demo", "--revision", "main"]);
-    hq_ok(d, &["scan", "sast-demo"]);
+    let ctx = common::Ctx::new();
+    hq_ok(&ctx, &["enroll", "github", "sast-demo", "--revision", "main"]);
+    hq_ok(&ctx, &["scan", "sast-demo"]);
     let out = hq_ok(
-        d,
+        &ctx,
         &[
             "scan",
             "sast-demo",

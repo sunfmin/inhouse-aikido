@@ -71,7 +71,9 @@ impl Engine for GitleaksEngine {
         if !git_dir.is_dir() {
             cmd.arg("--no-git");
         }
-        let out = cmd.output().map_err(|_| EngineError::Failed("gitleaks".into()))?;
+        let out = cmd
+            .output()
+            .map_err(|_| EngineError::Failed("gitleaks".into()))?;
         if !out.status.success() && !report.exists() {
             return Err(EngineError::Failed("gitleaks".into()));
         }

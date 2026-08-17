@@ -1,14 +1,12 @@
 mod common;
 use common::hq_ok;
-use tempfile::tempdir;
 
 #[test]
 fn intel_rescan_new_cve_no_baseline_pr_storm() {
-    let dir = tempdir().unwrap();
-    let d = dir.path();
-    hq_ok(d, &["enroll", "github", "acme/api", "--revision", "main"]);
+    let ctx = common::Ctx::new();
+    hq_ok(&ctx, &["enroll", "github", "acme/api", "--revision", "main"]);
     hq_ok(
-        d,
+        &ctx,
         &[
             "fake-obs",
             "acme/api",
@@ -29,10 +27,10 @@ fn intel_rescan_new_cve_no_baseline_pr_storm() {
             "2.0.0",
         ],
     );
-    hq_ok(d, &["scan", "acme/api"]);
+    hq_ok(&ctx, &["scan", "acme/api"]);
 
     hq_ok(
-        d,
+        &ctx,
         &[
             "fake-obs",
             "acme/api",
@@ -54,24 +52,23 @@ fn intel_rescan_new_cve_no_baseline_pr_storm() {
         ],
     );
 
-    let rescan = hq_ok(d, &["intel-rescan"]);
+    let rescan = hq_ok(&ctx, &["intel-rescan"]);
     assert!(rescan.contains("acme/api"));
-    let findings = hq_ok(d, &["findings"]);
+    let findings = hq_ok(&ctx, &["findings"]);
     assert!(findings.contains("CVE-NEW"));
     assert!(findings.contains("state=Open"));
 
     // baseline debt does not each get a remediation; only the new lodash pin
-    let dump = hq_ok(d, &["github-dump"]);
+    let dump = hq_ok(&ctx, &["github-dump"]);
     assert!(dump.contains("pin lodash"), "{dump}");
     assert!(!dump.contains("pin leftpad"), "{dump}");
 }
 
 #[test]
 fn intel_rescan_skips_unenrolled() {
-    let dir = tempdir().unwrap();
-    let d = dir.path();
+    let ctx = common::Ctx::new();
     hq_ok(
-        d,
+        &ctx,
         &[
             "fake-obs",
             "ghost/repo",
@@ -86,6 +83,6 @@ fn intel_rescan_skips_unenrolled() {
             "sca",
         ],
     );
-    let out = hq_ok(d, &["intel-rescan"]);
+    let out = hq_ok(&ctx, &["intel-rescan"]);
     assert_eq!(out, "no targets");
 }

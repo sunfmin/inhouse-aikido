@@ -11,9 +11,9 @@ pub struct Hq {
 }
 
 impl Hq {
-    pub fn open(dir: &std::path::Path) -> Result<Self, String> {
+    pub fn open(url: &str, schema: &str) -> Result<Self, String> {
         Ok(Self {
-            store: Store::open(dir)?,
+            store: Store::open(url, schema)?,
         })
     }
 
@@ -451,9 +451,7 @@ impl Hq {
         }
         match self.scan_with(repo, Some(head), &engines, workspace, true) {
             Ok(_) => self.post_gate(repo, pr, head, false, &[]),
-            Err(e) if e.starts_with("engines failed") => {
-                self.post_gate(repo, pr, head, true, &[])
-            }
+            Err(e) if e.starts_with("engines failed") => self.post_gate(repo, pr, head, true, &[]),
             Err(e) => Err(e),
         }
     }

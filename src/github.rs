@@ -11,7 +11,7 @@ pub trait Github: Send + Sync {
 pub struct FakeGithub {
     pub checks: Vec<CheckRun>,
     pub prs: Vec<OpenedPr>,
-    next_pr: u64,
+    pub next_pr: u64,
 }
 
 impl FakeGithub {

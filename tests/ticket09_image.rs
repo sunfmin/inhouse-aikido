@@ -1,14 +1,12 @@
 mod common;
 use common::hq_ok;
-use tempfile::tempdir;
 
 #[test]
 fn image_target_same_cve_is_second_finding() {
-    let dir = tempdir().unwrap();
-    let d = dir.path();
-    hq_ok(d, &["enroll", "github", "acme/api", "--revision", "abc"]);
+    let ctx = common::Ctx::new();
+    hq_ok(&ctx, &["enroll", "github", "acme/api", "--revision", "abc"]);
     hq_ok(
-        d,
+        &ctx,
         &[
             "enroll",
             "image",
@@ -18,7 +16,7 @@ fn image_target_same_cve_is_second_finding() {
         ],
     );
     hq_ok(
-        d,
+        &ctx,
         &[
             "fake-obs",
             "acme/api",
@@ -38,7 +36,7 @@ fn image_target_same_cve_is_second_finding() {
         ],
     );
     hq_ok(
-        d,
+        &ctx,
         &[
             "fake-obs",
             "acme/api-image",
@@ -57,16 +55,16 @@ fn image_target_same_cve_is_second_finding() {
             "usr/lib/lodash",
         ],
     );
-    let repo_scan = hq_ok(d, &["scan", "acme/api"]);
+    let repo_scan = hq_ok(&ctx, &["scan", "acme/api"]);
     assert!(repo_scan.contains("baseline_written"));
-    let img_scan = hq_ok(d, &["scan", "acme/api-image"]);
+    let img_scan = hq_ok(&ctx, &["scan", "acme/api-image"]);
     assert!(img_scan.contains("baseline_written"));
 
-    let findings = hq_ok(d, &["findings"]);
+    let findings = hq_ok(&ctx, &["findings"]);
     assert!(findings.contains("acme/api|CVE-2024-1111|package-lock.json::lodash"));
     assert!(findings.contains("acme/api-image|CVE-2024-1111|usr/lib/lodash::lodash"));
 
-    let targets = hq_ok(d, &["targets"]);
+    let targets = hq_ok(&ctx, &["targets"]);
     assert!(
         targets.contains("kind=Github")
             || targets.contains("kind=github")

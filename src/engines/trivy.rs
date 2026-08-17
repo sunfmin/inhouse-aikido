@@ -156,6 +156,8 @@ impl Engine for TrivyEngine {
                     "fs",
                     "--scanners",
                     "vuln,misconfig,license",
+                    "--skip-dirs",
+                    "node_modules,dist,target,.git",
                     "--format",
                     "json",
                     "--quiet",
