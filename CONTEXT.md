@@ -61,8 +61,12 @@ One Engine's report that supports a Finding.
 _Avoid_: result, match, hit (when you mean an Observation)
 
 **Target**:
-A durable asset HQ tracks — a GitHub repo or an image repo. Later, a cloud account. Not a commit and not a lockfile line.
+A durable asset HQ tracks — a GitHub repo or an image repo. Later, a cloud account. Not a commit and not a lockfile line. A Target exists only after Enrollment.
 _Avoid_: asset, project, resource (when you mean a Target)
+
+**Enrollment**:
+The Operator or repo-admin act that makes a repo or image repo a Target. The first Scan of the default Revision writes the Baseline and fails nothing; the Gate starts after that.
+_Avoid_: install, connect, onboard (when you mean Enrollment)
 
 **Revision**:
 The exact snapshot a Scan ran against — a git commit or an image digest.
