@@ -17,7 +17,7 @@ The Suite that scans what developers write and ship — source, dependencies, se
 _Avoid_: AppSec, repo scanning (when you mean this Suite)
 
 **Engine**:
-A swappable scanner that examines a target on our runners and emits findings. Source never goes to a SaaS engine.
+A swappable scanner that examines a Target on our runners and emits Observations. Source never goes to a SaaS engine.
 _Avoid_: scanner, tool, linter, plugin (when you mean an Engine)
 
 **Developer**:
@@ -29,5 +29,13 @@ The person who configures Engines, rules, and exceptions. They are not the inbox
 _Avoid_: admin, security person (when you mean this role)
 
 **HQ**:
-The long-lived control plane that holds inventory and findings between scans, and re-scans when Engine intel changes.
+The long-lived control plane that holds inventory and Findings between scans, and re-scans when Engine intel changes.
 _Avoid_: platform, dashboard, backend (when you mean the HQ)
+
+**Finding**:
+One problem on one kind of Target. Two Engines hitting the same lockfile CVE are one Finding; that CVE in the image is another.
+_Avoid_: alert, issue, vuln, hit (when you mean a Finding)
+
+**Observation**:
+One Engine's report that supports a Finding.
+_Avoid_: result, match, hit (when you mean an Observation)
