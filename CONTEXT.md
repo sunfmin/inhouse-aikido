@@ -83,3 +83,7 @@ _Avoid_: snapshot, backlog, debt (when you mean the Baseline)
 **Gate**:
 The CI verdict on a PR. It fails only when the PR Revision has an Open Finding whose Fingerprint is not on the Baseline.
 _Avoid_: check, status, block (when you mean the Gate)
+
+**Remediation**:
+A proposed change that would make a Finding Fixed, opened as a pull request against the Target.
+_Avoid_: autofix, patch, bot PR (when you mean a Remediation)
