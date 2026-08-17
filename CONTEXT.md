@@ -9,5 +9,9 @@ The commercial AppSec product at aikido.dev that this system replaces.
 _Avoid_: the vendor, the platform, the scanner (when you mean the product)
 
 **Suite**:
-One of Aikido's four product surfaces. This system targets parity with all four: Code, Cloud, Attack, and Protect.
+One of Aikido's four product surfaces. This system targets parity with all four: Code, Cloud, Attack, and Protect. The first release operates only Code.
 _Avoid_: module, pillar, area (when you mean a Suite)
+
+**Code**:
+The Suite that scans what developers write and ship — source, dependencies, secrets, IaC, licenses, and container images.
+_Avoid_: AppSec, repo scanning (when you mean this Suite)
