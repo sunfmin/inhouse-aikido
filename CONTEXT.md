@@ -15,3 +15,7 @@ _Avoid_: module, pillar, area (when you mean a Suite)
 **Code**:
 The Suite that scans what developers write and ship — source, dependencies, secrets, IaC, licenses, and container images.
 _Avoid_: AppSec, repo scanning (when you mean this Suite)
+
+**Engine**:
+A swappable scanner that examines a target on our runners and emits findings. Source never goes to a SaaS engine.
+_Avoid_: scanner, tool, linter, plugin (when you mean an Engine)
