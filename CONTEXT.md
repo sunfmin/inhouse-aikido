@@ -67,3 +67,11 @@ _Avoid_: version, sha (when you mean a Revision)
 **Scan**:
 One Engine run against one Target at one Revision.
 _Avoid_: job, check, analysis
+
+**Baseline**:
+The Fingerprints already Open or Dismissed on the Target's default Revision.
+_Avoid_: snapshot, backlog, debt (when you mean the Baseline)
+
+**Gate**:
+The CI verdict on a PR. It fails only when the PR Revision has an Open Finding whose Fingerprint is not on the Baseline.
+_Avoid_: check, status, block (when you mean the Gate)
