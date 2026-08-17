@@ -1,0 +1,11 @@
+rules:
+  - id: go.http.listen-and-serve
+    message: ListenAndServe has no timeouts; prefer http.Server with ReadHeaderTimeout.
+    languages: [go]
+    severity: WARNING
+    pattern: http.ListenAndServe(...)
+  - id: go.os.exec-command
+    message: exec.Command has no context; prefer exec.CommandContext so the process can be cancelled.
+    languages: [go]
+    severity: WARNING
+    pattern: exec.Command(...)

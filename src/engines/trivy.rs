@@ -28,8 +28,10 @@ pub struct TrivyResult {
 
 #[derive(Debug, Deserialize)]
 pub struct TrivyLicense {
-    #[serde(default, rename = "Name", alias = "PkgName")]
-    pub name: Option<String>,
+    #[serde(default, rename = "Name")]
+    pub license: Option<String>,
+    #[serde(default, rename = "PkgName")]
+    pub pkg: Option<String>,
     #[serde(default, rename = "FilePath")]
     pub file: Option<String>,
     #[serde(default, rename = "Category")]
@@ -104,7 +106,8 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
         }
         if let Some(licenses) = result.licenses {
             for lic in licenses {
-                let pkg = lic.name.clone().unwrap_or_else(|| "unknown".into());
+                let pkg = lic.pkg.clone().unwrap_or_else(|| "unknown".into());
+                let license = lic.license.clone().unwrap_or_else(|| "unknown".into());
                 let loc = lic
                     .file
                     .as_deref()
@@ -112,13 +115,13 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
                     .unwrap_or_else(|| dependency_location(&manifest, &pkg));
                 out.push(Observation {
                     engine: "trivy".into(),
-                    problem_id: lic.category.or(lic.name).unwrap_or_else(|| "license".into()),
+                    problem_id: license,
                     location_key: loc,
                     kind: FindingKind::License,
                     package: Some(pkg),
                     manifest: Some(manifest.clone()),
                     fixed_version: None,
-                    message: String::new(),
+                    message: lic.category.unwrap_or_default(),
                 });
             }
         }

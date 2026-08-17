@@ -36,7 +36,7 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
         .map(|r| Observation {
             engine: "opengrep".into(),
             problem_id: r.check_id,
-            location_key: r.path,
+            location_key: r.path, // rewritten relative to workspace in scan()
             kind: FindingKind::Sast,
             package: None,
             manifest: None,
@@ -61,13 +61,41 @@ impl Engine for OpengrepEngine {
     ) -> Result<Vec<Observation>, EngineError> {
         let dir =
             workspace.ok_or_else(|| EngineError::Other("opengrep requires --workspace".into()))?;
+        let config = std::env::var("HQ_OPENGREP_CONFIG").unwrap_or_else(|_| {
+            let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("rules/opengrep");
+            bundled.display().to_string()
+        });
         let out = Command::new("opengrep")
-            .args(["scan", "--json", "--quiet", &dir.display().to_string()])
+            .args([
+                "scan",
+                "--json",
+                "--quiet",
+                "--config",
+                &config,
+                &dir.display().to_string(),
+            ])
             .output()
             .map_err(|_| EngineError::Failed("opengrep".into()))?;
         if !out.status.success() && out.stdout.is_empty() {
             return Err(EngineError::Failed("opengrep".into()));
         }
-        observations_from_json(&String::from_utf8_lossy(&out.stdout))
+        // Opengrep may print logs before JSON
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let raw = stdout
+            .find('{')
+            .map(|i| &stdout[i..])
+            .unwrap_or(stdout.as_ref());
+        let mut obs = observations_from_json(raw)?;
+        let prefix = dir.display().to_string();
+        for o in &mut obs {
+            if let Some(rest) = o
+                .location_key
+                .strip_prefix(&prefix)
+                .map(|s| s.trim_start_matches('/'))
+            {
+                o.location_key = rest.to_string();
+            }
+        }
+        Ok(obs)
     }
 }

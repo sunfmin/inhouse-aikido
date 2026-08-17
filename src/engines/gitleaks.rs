@@ -54,20 +54,33 @@ impl Engine for GitleaksEngine {
         let Some(dir) = workspace else {
             return Err(EngineError::Other("gitleaks requires --workspace".into()));
         };
-        let out = Command::new("gitleaks")
-            .args([
-                "detect",
-                "--no-git",
-                "-s",
-                &dir.display().to_string(),
-                "-f",
-                "json",
-                "--exit-code",
-                "0",
-            ])
-            .output()
-            .map_err(|_| EngineError::Failed("gitleaks".into()))?;
-        let raw = String::from_utf8_lossy(&out.stdout);
+        let report = std::env::temp_dir().join(format!("gitleaks-{}.json", std::process::id()));
+        let git_dir = dir.join(".git");
+        let mut cmd = Command::new("gitleaks");
+        cmd.args([
+            "detect",
+            "-s",
+            &dir.display().to_string(),
+            "-f",
+            "json",
+            "--report-path",
+            &report.display().to_string(),
+            "--exit-code",
+            "0",
+        ]);
+        if !git_dir.is_dir() {
+            cmd.arg("--no-git");
+        }
+        let out = cmd.output().map_err(|_| EngineError::Failed("gitleaks".into()))?;
+        if !out.status.success() && !report.exists() {
+            return Err(EngineError::Failed("gitleaks".into()));
+        }
+        let raw = if report.exists() {
+            std::fs::read_to_string(&report).unwrap_or_default()
+        } else {
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        let _ = std::fs::remove_file(&report);
         observations_from_json(&raw)
     }
 }
