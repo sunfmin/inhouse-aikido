@@ -85,5 +85,5 @@ The CI verdict on a PR. It fails only when the PR Revision has an Open Finding w
 _Avoid_: check, status, block (when you mean the Gate)
 
 **Remediation**:
-A proposed change that would make a Finding Fixed, opened as a pull request against the Target.
+A pull request HQ opens against the Target's default Revision after Baseline exists, applying a concrete safe edit (a dependency pin to a known fixed version). Secrets, SAST, and IaC do not get a Remediation in the first release.
 _Avoid_: autofix, patch, bot PR (when you mean a Remediation)
