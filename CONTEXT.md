@@ -27,3 +27,7 @@ _Avoid_: user, engineer (when you mean this role)
 **Operator**:
 The person who configures Engines, rules, and exceptions. They are not the inbox for findings.
 _Avoid_: admin, security person (when you mean this role)
+
+**HQ**:
+The long-lived control plane that holds inventory and findings between scans, and re-scans when Engine intel changes.
+_Avoid_: platform, dashboard, backend (when you mean the HQ)
