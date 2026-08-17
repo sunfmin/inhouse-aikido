@@ -349,15 +349,48 @@ impl Hq {
         opened
     }
 
-    pub fn findings_text(&self, target: Option<&str>) -> String {
+    fn filtered_findings(
+        &self,
+        target: Option<&str>,
+        state: Option<&str>,
+        kind: Option<&str>,
+    ) -> Vec<&Finding> {
         let mut items: Vec<&Finding> = self
             .store
             .state
             .findings
             .values()
             .filter(|f| target.is_none_or(|t| f.fingerprint.target == t))
+            .filter(|f| {
+                state.is_none_or(|s| match s {
+                    "open" => f.state == FindingState::Open,
+                    "fixed" => f.state == FindingState::Fixed,
+                    "dismissed" => f.state == FindingState::Dismissed,
+                    _ => true,
+                })
+            })
+            .filter(|f| {
+                kind.is_none_or(|k| match k {
+                    "sca" => f.kind == FindingKind::Sca,
+                    "secret" => f.kind == FindingKind::Secret,
+                    "sast" => f.kind == FindingKind::Sast,
+                    "iac" => f.kind == FindingKind::Iac,
+                    "license" => f.kind == FindingKind::License,
+                    _ => true,
+                })
+            })
             .collect();
         items.sort_by_key(|f| f.fingerprint.display());
+        items
+    }
+
+    pub fn findings_text(
+        &self,
+        target: Option<&str>,
+        state: Option<&str>,
+        kind: Option<&str>,
+    ) -> String {
+        let items = self.filtered_findings(target, state, kind);
         if items.is_empty() {
             return "no findings".into();
         }
@@ -375,6 +408,55 @@ impl Hq {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    pub fn findings_json(
+        &self,
+        target: Option<&str>,
+        state: Option<&str>,
+        kind: Option<&str>,
+    ) -> Result<String, String> {
+        let views: Vec<crate::brief::FindingView> = self
+            .filtered_findings(target, state, kind)
+            .into_iter()
+            .map(crate::brief::FindingView::from_finding)
+            .collect();
+        serde_json::to_string_pretty(&views).map_err(|e| e.to_string())
+    }
+
+    pub fn show(&self, fp: &Fingerprint) -> Result<String, String> {
+        let f = self
+            .store
+            .state
+            .finding(fp)
+            .ok_or_else(|| format!("unknown finding {}", fp.display()))?;
+        serde_json::to_string_pretty(&crate::brief::FindingView::from_finding(f))
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn brief(&self, fp: Option<&Fingerprint>) -> Result<String, String> {
+        let f = if let Some(fp) = fp {
+            self.store
+                .state
+                .finding(fp)
+                .ok_or_else(|| format!("unknown finding {}", fp.display()))?
+        } else {
+            self.next_agent_finding()
+                .ok_or_else(|| "no agent-fixable Open Finding".to_string())?
+        };
+        Ok(crate::brief::brief_markdown(f))
+    }
+
+    fn next_agent_finding(&self) -> Option<&Finding> {
+        let mut items: Vec<&Finding> = self
+            .store
+            .state
+            .findings
+            .values()
+            .filter(|f| crate::brief::is_agent_fixable(f))
+            .collect();
+        items.sort_by_key(|f| (crate::brief::pickup_rank(f), f.fingerprint.display()));
+        items.into_iter().next()
     }
 
     pub fn dismissed_text(&self) -> String {

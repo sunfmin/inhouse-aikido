@@ -1,3 +1,4 @@
+pub mod brief;
 pub mod cli;
 pub mod domain;
 pub mod engine;

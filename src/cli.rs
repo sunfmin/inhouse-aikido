@@ -65,6 +65,20 @@ pub enum Cmd {
     Findings {
         #[arg(long)]
         target: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        state: Option<String>,
+        #[arg(long)]
+        kind: Option<String>,
+    },
+    /// One Finding as JSON.
+    Show {
+        fingerprint: String,
+    },
+    /// Agent Brief for one Finding, or the next agent-fixable Open Finding.
+    Brief {
+        fingerprint: Option<String>,
     },
     Dismissed,
     Reopen {
@@ -196,7 +210,29 @@ fn dispatch(hq: &mut Hq, cmd: Cmd) -> Result<String, String> {
                 false,
             )
         }
-        Cmd::Findings { target } => Ok(hq.findings_text(target.as_deref())),
+        Cmd::Findings {
+            target,
+            json,
+            state,
+            kind,
+        } => {
+            if json {
+                hq.findings_json(target.as_deref(), state.as_deref(), kind.as_deref())
+            } else {
+                Ok(hq.findings_text(target.as_deref(), state.as_deref(), kind.as_deref()))
+            }
+        }
+        Cmd::Show { fingerprint } => {
+            let fp = Fingerprint::parse(&fingerprint).ok_or("bad fingerprint")?;
+            hq.show(&fp)
+        }
+        Cmd::Brief { fingerprint } => {
+            let parsed = fingerprint
+                .as_deref()
+                .map(|s| Fingerprint::parse(s).ok_or("bad fingerprint"))
+                .transpose()?;
+            hq.brief(parsed.as_ref())
+        }
         Cmd::Dismissed => Ok(hq.dismissed_text()),
         Cmd::Reopen { fingerprint } => {
             let fp = Fingerprint::parse(&fingerprint).ok_or("bad fingerprint")?;
