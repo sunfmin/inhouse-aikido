@@ -40,6 +40,18 @@ _Avoid_: alert, issue, vuln, hit (when you mean a Finding)
 The identity of a Finding: Target + problem id (CVE or rule) + location key (package name or file path). Not the line number, not the Engine, not the package version.
 _Avoid_: hash, key, dedup id
 
+**Open**:
+A Finding whose latest Scan on that Target still produced an Observation, and that has not been Dismissed.
+_Avoid_: active, new, unresolved (when you mean Open)
+
+**Fixed**:
+A Finding whose later Scan on that Target no longer produced an Observation.
+_Avoid_: resolved, closed, gone (when you mean Fixed)
+
+**Dismissed**:
+A human decision on a Finding: do not nag this Target for this Fingerprint until someone reopens it.
+_Avoid_: ignored, accepted, suppressed, wontfix (when you mean Dismissed)
+
 **Observation**:
 One Engine's report that supports a Finding.
 _Avoid_: result, match, hit (when you mean an Observation)
