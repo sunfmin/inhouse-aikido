@@ -37,7 +37,7 @@ One problem on one kind of Target. Two Engines hitting the same lockfile CVE are
 _Avoid_: alert, issue, vuln, hit (when you mean a Finding)
 
 **Fingerprint**:
-The identity of a Finding: Target + problem id (CVE or rule) + location key (package name or file path). Not the line number, not the Engine, not the package version.
+The identity of a Finding: Target + problem id (CVE or rule) + location key. The location key is a file path — manifest path plus package name for dependencies, source file path for SAST and secrets. Not the line number, not the Engine, not the package version.
 _Avoid_: hash, key, dedup id
 
 **Open**:
