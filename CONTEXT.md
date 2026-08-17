@@ -39,3 +39,15 @@ _Avoid_: alert, issue, vuln, hit (when you mean a Finding)
 **Observation**:
 One Engine's report that supports a Finding.
 _Avoid_: result, match, hit (when you mean an Observation)
+
+**Target**:
+A durable asset HQ tracks — a GitHub repo or an image repo. Later, a cloud account. Not a commit and not a lockfile line.
+_Avoid_: asset, project, resource (when you mean a Target)
+
+**Revision**:
+The exact snapshot a Scan ran against — a git commit or an image digest.
+_Avoid_: version, sha (when you mean a Revision)
+
+**Scan**:
+One Engine run against one Target at one Revision.
+_Avoid_: job, check, analysis
