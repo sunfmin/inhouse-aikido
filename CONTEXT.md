@@ -25,7 +25,7 @@ The person who changes the code a Finding is about. They see Findings as PR anno
 _Avoid_: user, engineer (when you mean this role)
 
 **Operator**:
-The person who configures Engines and rules, reviews the Dismissed list, and Reopens. They are not the inbox for Findings.
+The person who configures Engines and rules, reviews the Dismissed list, and Reopens, all through the HQ CLI. They are not the inbox for Findings and they do not get a web UI.
 _Avoid_: admin, security person (when you mean this role)
 
 **HQ**:
