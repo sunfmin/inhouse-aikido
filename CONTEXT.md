@@ -19,3 +19,11 @@ _Avoid_: AppSec, repo scanning (when you mean this Suite)
 **Engine**:
 A swappable scanner that examines a target on our runners and emits findings. Source never goes to a SaaS engine.
 _Avoid_: scanner, tool, linter, plugin (when you mean an Engine)
+
+**Developer**:
+The person who changes the code a finding is about. They see findings as PR annotations.
+_Avoid_: user, engineer (when you mean this role)
+
+**Operator**:
+The person who configures Engines, rules, and exceptions. They are not the inbox for findings.
+_Avoid_: admin, security person (when you mean this role)
