@@ -1,0 +1,11 @@
+rules:
+  - id: js.eval
+    message: eval() executes strings as code.
+    languages: [js, ts]
+    severity: ERROR
+    pattern: eval(...)
+  - id: js.inner-html
+    message: Assigning to innerHTML can interpret untrusted markup.
+    languages: [js, ts]
+    severity: WARNING
+    pattern: $EL.innerHTML = $X
