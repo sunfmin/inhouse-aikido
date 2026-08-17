@@ -36,6 +36,10 @@ _Avoid_: platform, dashboard, backend (when you mean the HQ)
 One problem on one kind of Target. Two Engines hitting the same lockfile CVE are one Finding; that CVE in the image is another.
 _Avoid_: alert, issue, vuln, hit (when you mean a Finding)
 
+**Fingerprint**:
+The identity of a Finding: Target + problem id (CVE or rule) + location key (package name or file path). Not the line number, not the Engine, not the package version.
+_Avoid_: hash, key, dedup id
+
 **Observation**:
 One Engine's report that supports a Finding.
 _Avoid_: result, match, hit (when you mean an Observation)
