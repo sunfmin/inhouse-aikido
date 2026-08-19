@@ -1,5 +1,5 @@
 use crate::domain::{FindingKind, Observation, Revision, Target};
-use crate::engine::{Engine, EngineError};
+use crate::engine::{engine_timeout, run_with_timeout, Engine, EngineError};
 use serde::Deserialize;
 use std::path::Path;
 use std::process::Command;
@@ -74,17 +74,16 @@ impl Engine for OpengrepEngine {
             let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("rules/opengrep");
             bundled.display().to_string()
         });
-        let out = Command::new("opengrep")
-            .args([
-                "scan",
-                "--json",
-                "--quiet",
-                "--config",
-                &config,
-                &dir.display().to_string(),
-            ])
-            .output()
-            .map_err(|_| EngineError::Failed("opengrep".into()))?;
+        let mut cmd = Command::new("opengrep");
+        cmd.args([
+            "scan",
+            "--json",
+            "--quiet",
+            "--config",
+            &config,
+            &dir.display().to_string(),
+        ]);
+        let out = run_with_timeout(cmd, "opengrep", engine_timeout())?;
         if !out.status.success() && out.stdout.is_empty() {
             return Err(EngineError::Failed("opengrep".into()));
         }

@@ -127,8 +127,28 @@ pub enum Cmd {
         r#use: String,
         #[arg(long)]
         workspace: Option<PathBuf>,
+        /// Scan every Target here and now instead of queueing the Scans.
+        #[arg(long, default_value_t = false)]
+        now: bool,
     },
     GithubDump,
+    /// What the Scan queue is doing: what is waiting, running, and how long it took.
+    Scans {
+        #[arg(long, default_value_t = 20)]
+        limit: i64,
+    },
+    /// Run queued Scans.
+    Work {
+        /// How many Scans to run at once.
+        #[arg(long, env = "HQ_WORKERS", default_value_t = 2)]
+        workers: usize,
+        /// Stop once the queue is empty instead of waiting for more work.
+        #[arg(long, default_value_t = false)]
+        drain: bool,
+        /// How long a claimed Scan may go silent before another worker takes it.
+        #[arg(long, default_value_t = 900)]
+        lease_secs: u64,
+    },
     /// Receive GitHub App webhooks and act on them.
     Serve {
         /// Address to listen on.
@@ -137,6 +157,10 @@ pub enum Cmd {
         /// Comma-separated Engine names to run when a PR arrives.
         #[arg(long, default_value = "fake")]
         r#use: String,
+        /// Scan workers to run alongside the listener. 0 leaves the queue to a
+        /// separate `hq work`.
+        #[arg(long, env = "HQ_WORKERS", default_value_t = 2)]
+        workers: usize,
     },
     /// App identity and installation diagnostics. Needs no database.
     Github {
@@ -165,8 +189,29 @@ where
         return github_cmd(sub);
     }
     // The server opens HQ once per delivery, not once for the process.
-    if let Cmd::Serve { addr, r#use } = &cli.cmd {
-        return serve_cmd(&cli, addr, r#use);
+    if let Cmd::Serve {
+        addr,
+        r#use,
+        workers,
+    } = &cli.cmd
+    {
+        return serve_cmd(&cli, addr, r#use, *workers);
+    }
+    // Neither touches HQ's state, and both can run while workers are writing —
+    // so neither may save, or it would write back a snapshot taken before the
+    // worker's. Opening the Store once still creates the schema.
+    if let Cmd::Scans { limit } = &cli.cmd {
+        let hq = open_hq(&cli)?;
+        return scans_cmd(&hq, *limit);
+    }
+    if let Cmd::Work {
+        workers,
+        drain,
+        lease_secs,
+    } = &cli.cmd
+    {
+        drop(open_hq(&cli)?);
+        return work_cmd(&cli, *workers, *drain, *lease_secs);
     }
     let mut hq = open_hq(&cli)?;
     let out = dispatch(&mut hq, cli.cmd)?;
@@ -208,7 +253,7 @@ pub fn open_hq_for(database_url: &str, schema: &str, backend: &str) -> Result<Hq
     }
 }
 
-fn serve_cmd(cli: &Cli, addr: &str, uses: &str) -> Result<String, String> {
+fn serve_cmd(cli: &Cli, addr: &str, uses: &str, workers: usize) -> Result<String, String> {
     let config = crate::webhook::ServeConfig {
         secret: std::env::var("HQ_WEBHOOK_SECRET").unwrap_or_default(),
         database_url: cli.database_url.clone(),
@@ -218,8 +263,76 @@ fn serve_cmd(cli: &Cli, addr: &str, uses: &str) -> Result<String, String> {
     };
     let server = crate::webhook::WebhookServer::bind(addr, config)?;
     println!("hq serve: listening on {}", server.local_addr());
+    // Deliveries only enqueue Scans, so unless somebody else runs `hq work` the
+    // queue would just grow. Run the workers here by default.
+    if workers > 0 {
+        let worker_config = worker_config(cli, workers, 900);
+        std::thread::spawn(move || {
+            crate::worker::run_pool(worker_config, false, None);
+        });
+        println!("hq serve: {workers} scan workers");
+    }
     server.run(None);
     Ok("hq serve: stopped".into())
+}
+
+fn worker_config(cli: &Cli, workers: usize, lease_secs: u64) -> crate::worker::WorkerConfig {
+    crate::worker::WorkerConfig {
+        database_url: cli.database_url.clone(),
+        schema: cli.schema.clone(),
+        github_backend: cli.github_backend.clone(),
+        workers,
+        lease: std::time::Duration::from_secs(lease_secs),
+        poll: std::time::Duration::from_millis(500),
+    }
+}
+
+fn work_cmd(cli: &Cli, workers: usize, drain: bool, lease_secs: u64) -> Result<String, String> {
+    // Workers open HQ per job, under the write lock, so this command does not
+    // hold one open for its whole life.
+    let done = crate::worker::run_pool(worker_config(cli, workers, lease_secs), drain, None);
+    Ok(format!("ran {done} scans"))
+}
+
+fn scans_cmd(hq: &Hq, limit: i64) -> Result<String, String> {
+    let rows = hq.store.queue().list(limit)?;
+    if rows.is_empty() {
+        return Ok("no scans".into());
+    }
+    let mut out = Vec::new();
+    for row in rows {
+        let mut line = format!(
+            "{} {} {}@{} engines={} state={}",
+            row.id,
+            row.purpose.as_str(),
+            row.target,
+            short(&row.revision),
+            row.engines.join(","),
+            row.state
+        );
+        if let Some(worker) = row.claimed_by {
+            line.push_str(&format!(" worker={worker}"));
+        }
+        if let Some(waited) = row.waited_secs {
+            line.push_str(&format!(" waited={waited:.1}s"));
+        }
+        if let Some(took) = row.took_secs {
+            line.push_str(&format!(" took={took:.1}s"));
+        }
+        if let Some(note) = row.note.filter(|n| !n.is_empty()) {
+            line.push_str(&format!(" note={note:?}"));
+        }
+        out.push(line);
+    }
+    Ok(out.join("\n"))
+}
+
+fn short(revision: &str) -> String {
+    if revision.len() > 12 && revision.chars().all(|c| c.is_ascii_hexdigit()) {
+        revision[..12].to_string()
+    } else {
+        revision.to_string()
+    }
 }
 
 fn github_cmd(sub: &GithubCmd) -> Result<String, String> {
@@ -398,11 +511,22 @@ fn dispatch(hq: &mut Hq, cmd: Cmd) -> Result<String, String> {
             can_write,
             body,
         } => hq.handle_comment(&repo, number, &author, can_write, &body),
-        Cmd::IntelRescan { r#use, workspace } => {
+        Cmd::IntelRescan {
+            r#use,
+            workspace,
+            now,
+        } => {
             let names: Vec<&str> = r#use.split(',').map(str::trim).collect();
-            hq.intel_rescan_named(&names, workspace.as_deref())
+            if now {
+                hq.intel_rescan_named(&names, workspace.as_deref())
+            } else {
+                hq.queue_rescan(&names)
+            }
         }
         Cmd::GithubDump => Ok(hq.github_dump()),
+        // Handled before HQ is opened, because neither may save.
+        Cmd::Scans { .. } => Err("hq scans is handled earlier".into()),
+        Cmd::Work { .. } => Err("hq work is handled earlier".into()),
         // Both are handled before the Store is opened.
         Cmd::Github { sub } => github_cmd(&sub),
         Cmd::Serve { .. } => Err("hq serve is handled before HQ is opened".into()),

@@ -4,7 +4,10 @@ use common::hq_ok;
 #[test]
 fn intel_rescan_new_cve_no_baseline_pr_storm() {
     let ctx = common::Ctx::new();
-    hq_ok(&ctx, &["enroll", "github", "acme/api", "--revision", "main"]);
+    hq_ok(
+        &ctx,
+        &["enroll", "github", "acme/api", "--revision", "main"],
+    );
     hq_ok(
         &ctx,
         &[
@@ -52,8 +55,11 @@ fn intel_rescan_new_cve_no_baseline_pr_storm() {
         ],
     );
 
+    // The rescan queues one Scan per Target; a worker runs them.
     let rescan = hq_ok(&ctx, &["intel-rescan"]);
-    assert!(rescan.contains("acme/api"));
+    assert!(rescan.contains("queued acme/api"), "{rescan}");
+    let worked = hq_ok(&ctx, &["work", "--drain", "--workers", "1"]);
+    assert_eq!(worked, "ran 1 scans");
     let findings = hq_ok(&ctx, &["findings"]);
     assert!(findings.contains("CVE-NEW"));
     assert!(findings.contains("state=Open"));

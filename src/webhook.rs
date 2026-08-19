@@ -2,8 +2,9 @@
 //!
 //! A delivery is verified, acknowledged, and only then acted on — a Scan can
 //! take minutes and GitHub's delivery timeout is seconds, so HQ answers first
-//! and works after. Deliveries are handled one at a time; concurrency arrives
-//! with the Scan queue.
+//! and works after. A PR delivery does not scan inline: it puts a Scan on the
+//! queue and returns, so a push storm becomes queue depth rather than a pile of
+//! deliveries timing out.
 //!
 //! See ADR 0020 (HQ stays synchronous) and ADR 0019 (HQ is a GitHub App).
 
@@ -135,7 +136,9 @@ pub fn parse_event(event: &str, payload: &Value) -> Result<Event, String> {
             if action != "created" {
                 return Ok(Event::Ignored(format!("issue_comment {action}")));
             }
-            let issue = payload.get("issue").ok_or("issue_comment without an issue")?;
+            let issue = payload
+                .get("issue")
+                .ok_or("issue_comment without an issue")?;
             if issue.get("pull_request").is_none() {
                 return Ok(Event::Ignored("comment on an issue, not a PR".into()));
             }
@@ -212,7 +215,15 @@ pub fn handle_event(hq: &mut Hq, event: &Event, engines: &[&str]) -> Result<Stri
             if !hq.baseline_ready(repo) {
                 return Ok(format!("{repo} has no Baseline yet, ignored"));
             }
-            hq.handle_pr_named(repo, *number, head, base, engines, None)
+            let id = hq.store.queue().enqueue(&crate::queue::JobRequest {
+                target: repo.clone(),
+                revision: head.clone(),
+                engines: engines.iter().map(|e| e.to_string()).collect(),
+                purpose: crate::queue::Purpose::Gate,
+                pr_number: Some(*number),
+                base_revision: Some(base.clone()),
+            })?;
+            Ok(format!("queued {repo} pr={number} scan={id}"))
         }
         Event::Command {
             repo,
@@ -268,12 +279,14 @@ pub struct WebhookServer {
 impl WebhookServer {
     pub fn bind(addr: &str, config: ServeConfig) -> Result<Self, String> {
         if config.secret.is_empty() {
-            return Err("HQ_WEBHOOK_SECRET is not set — HQ will not accept unverified \
+            return Err(
+                "HQ_WEBHOOK_SECRET is not set — HQ will not accept unverified \
                         deliveries"
-                .into());
+                    .into(),
+            );
         }
-        let server = tiny_http::Server::http(addr)
-            .map_err(|e| format!("cannot listen on {addr}: {e}"))?;
+        let server =
+            tiny_http::Server::http(addr).map_err(|e| format!("cannot listen on {addr}: {e}"))?;
         Ok(Self { server, config })
     }
 
@@ -334,8 +347,8 @@ impl WebhookServer {
         if !delivery.is_empty() && hq.store.delivery_seen(delivery)? {
             return Ok("duplicate delivery, already handled".into());
         }
-        let payload: Value = serde_json::from_slice(body)
-            .map_err(|e| format!("delivery body is not JSON: {e}"))?;
+        let payload: Value =
+            serde_json::from_slice(body).map_err(|e| format!("delivery body is not JSON: {e}"))?;
         let parsed = parse_event(event, &payload)?;
         let engines: Vec<&str> = self.config.engines.iter().map(String::as_str).collect();
         let out = handle_event(&mut hq, &parsed, &engines)?;
@@ -357,7 +370,7 @@ fn header(request: &tiny_http::Request, name: &'static str) -> String {
 }
 
 fn respond(request: tiny_http::Request, status: u16, message: &str) {
-    let response = tiny_http::Response::from_string(message)
-        .with_status_code(tiny_http::StatusCode(status));
+    let response =
+        tiny_http::Response::from_string(message).with_status_code(tiny_http::StatusCode(status));
     let _ = request.respond(response);
 }

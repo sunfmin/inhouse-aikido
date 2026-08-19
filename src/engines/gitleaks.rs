@@ -1,5 +1,5 @@
 use crate::domain::{FindingKind, Observation, Revision, Target};
-use crate::engine::{Engine, EngineError};
+use crate::engine::{engine_timeout, run_with_timeout, Engine, EngineError};
 use serde::Deserialize;
 use std::path::Path;
 use std::process::Command;
@@ -75,9 +75,7 @@ impl Engine for GitleaksEngine {
         if !git_dir.is_dir() {
             cmd.arg("--no-git");
         }
-        let out = cmd
-            .output()
-            .map_err(|_| EngineError::Failed("gitleaks".into()))?;
+        let out = run_with_timeout(cmd, "gitleaks", engine_timeout())?;
         if !out.status.success() && !report.exists() {
             return Err(EngineError::Failed("gitleaks".into()));
         }

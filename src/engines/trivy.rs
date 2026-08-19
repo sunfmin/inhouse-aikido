@@ -1,5 +1,5 @@
 use crate::domain::{dependency_location, FindingKind, Observation, Revision, Target};
-use crate::engine::{Engine, EngineError};
+use crate::engine::{engine_timeout, run_with_timeout, Engine, EngineError};
 use serde::Deserialize;
 use std::path::Path;
 use std::process::Command;
@@ -178,9 +178,7 @@ impl Engine for TrivyEngine {
                 ]);
             }
         }
-        let out = cmd
-            .output()
-            .map_err(|_| EngineError::Failed("trivy".into()))?;
+        let out = run_with_timeout(cmd, "trivy", engine_timeout())?;
         if !out.status.success() && out.stdout.is_empty() {
             return Err(EngineError::Failed("trivy".into()));
         }

@@ -5,7 +5,9 @@ mod common;
 
 use common::{Ctx, TEST_URL};
 use hq::domain::{FindingKind, Observation, TargetKind};
-use hq::webhook::{handle_event, parse_event, sign, signature_matches, Event, ServeConfig, WebhookServer};
+use hq::webhook::{
+    handle_event, parse_event, sign, signature_matches, Event, ServeConfig, WebhookServer,
+};
 use hq::Hq;
 use serde_json::json;
 
@@ -27,6 +29,23 @@ fn secret_obs(problem: &str) -> Observation {
         message: "leaked key".into(),
         line: Some(7),
     }
+}
+
+/// Run every queued Scan and report how many ran. A delivery only queues work;
+/// this is the worker that does it.
+fn drain(ctx: &Ctx) -> usize {
+    hq::worker::run_pool(
+        hq::worker::WorkerConfig {
+            database_url: TEST_URL.into(),
+            schema: ctx.schema.clone(),
+            github_backend: "fake".into(),
+            workers: 1,
+            lease: std::time::Duration::from_secs(60),
+            poll: std::time::Duration::from_millis(20),
+        },
+        true,
+        None,
+    )
 }
 
 fn enrolled(hq: &mut Hq) {
@@ -59,11 +78,21 @@ fn only_a_delivery_signed_with_our_secret_is_accepted() {
     let body = br#"{"action":"opened"}"#;
     assert!(signature_matches(SECRET, body, &sign(SECRET, body)));
 
-    assert!(!signature_matches("another-secret", body, &sign(SECRET, body)));
+    assert!(!signature_matches(
+        "another-secret",
+        body,
+        &sign(SECRET, body)
+    ));
     assert!(!signature_matches(SECRET, b"tampered", &sign(SECRET, body)));
     assert!(!signature_matches(SECRET, body, ""), "missing header");
-    assert!(!signature_matches(SECRET, body, "sha1=abcdef"), "wrong algorithm");
-    assert!(!signature_matches(SECRET, body, "sha256=nothex"), "malformed digest");
+    assert!(
+        !signature_matches(SECRET, body, "sha1=abcdef"),
+        "wrong algorithm"
+    );
+    assert!(
+        !signature_matches(SECRET, body, "sha256=nothex"),
+        "malformed digest"
+    );
 }
 
 // --- parsing -----------------------------------------------------------------
@@ -95,14 +124,38 @@ fn a_pull_request_delivery_names_the_revision_to_gate() {
 #[test]
 fn write_access_comes_from_the_author_association() {
     for association in ["OWNER", "MEMBER", "COLLABORATOR"] {
-        let event =
-            parse_event("issue_comment", &comment_payload(1, "/hq dismiss x", association)).unwrap();
-        assert!(matches!(event, Event::Command { can_write: true, .. }), "{association}");
+        let event = parse_event(
+            "issue_comment",
+            &comment_payload(1, "/hq dismiss x", association),
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                event,
+                Event::Command {
+                    can_write: true,
+                    ..
+                }
+            ),
+            "{association}"
+        );
     }
     for association in ["CONTRIBUTOR", "NONE", "FIRST_TIME_CONTRIBUTOR"] {
-        let event =
-            parse_event("issue_comment", &comment_payload(1, "/hq dismiss x", association)).unwrap();
-        assert!(matches!(event, Event::Command { can_write: false, .. }), "{association}");
+        let event = parse_event(
+            "issue_comment",
+            &comment_payload(1, "/hq dismiss x", association),
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                event,
+                Event::Command {
+                    can_write: false,
+                    ..
+                }
+            ),
+            "{association}"
+        );
     }
 }
 
@@ -140,10 +193,13 @@ fn a_pull_request_delivery_gates_the_head_revision() {
     hq.add_fake_obs("acme/web", "headsha", secret_obs("gitleaks:aws-key"));
 
     let event = parse_event("pull_request", &pr_payload(42, "headsha", "opened")).unwrap();
+    // The delivery queues the Scan and returns; GitHub is not kept waiting.
     let out = handle_event(&mut hq, &event, &["fake"]).unwrap();
-    assert!(out.contains("gate=failure"), "got {out}");
+    assert!(out.contains("queued acme/web pr=42"), "got {out}");
+    hq.save().unwrap();
+    assert_eq!(drain(&ctx), 1);
 
-    let dump: serde_json::Value = serde_json::from_str(&hq.github_dump()).unwrap();
+    let dump: serde_json::Value = serde_json::from_str(&open(&ctx).github_dump()).unwrap();
     assert_eq!(dump["checks"][0]["pr"], 42);
     assert_eq!(dump["checks"][0]["head_sha"], "headsha");
     assert_eq!(dump["checks"][0]["conclusion"], "failure");
@@ -157,6 +213,8 @@ fn a_dismiss_comment_turns_the_gate_green_for_that_fingerprint() {
     hq.add_fake_obs("acme/web", "headsha", secret_obs("gitleaks:aws-key"));
     let gate = parse_event("pull_request", &pr_payload(42, "headsha", "opened")).unwrap();
     handle_event(&mut hq, &gate, &["fake"]).unwrap();
+    hq.save().unwrap();
+    drain(&ctx);
 
     let fingerprint = "acme/web|gitleaks:aws-key|src/config.js";
     let comment = parse_event(
@@ -164,7 +222,9 @@ fn a_dismiss_comment_turns_the_gate_green_for_that_fingerprint() {
         &comment_payload(42, &format!("/hq dismiss {fingerprint}"), "MEMBER"),
     )
     .unwrap();
+    let mut hq = open(&ctx);
     handle_event(&mut hq, &comment, &["fake"]).unwrap();
+    hq.save().unwrap();
 
     let dump: serde_json::Value = serde_json::from_str(&hq.github_dump()).unwrap();
     assert_eq!(dump["checks"][0]["conclusion"], "success");
@@ -181,7 +241,11 @@ fn a_commenter_who_cannot_write_the_target_is_refused() {
 
     let comment = parse_event(
         "issue_comment",
-        &comment_payload(42, "/hq dismiss acme/web|gitleaks:aws-key|src/config.js", "NONE"),
+        &comment_payload(
+            42,
+            "/hq dismiss acme/web|gitleaks:aws-key|src/config.js",
+            "NONE",
+        ),
     )
     .unwrap();
     assert!(handle_event(&mut hq, &comment, &["fake"]).is_err());
@@ -281,7 +345,13 @@ fn serve(ctx: &Ctx) -> (WebhookServer, String) {
     (server, addr)
 }
 
-fn deliver(addr: &str, event: &str, delivery: &str, payload: &serde_json::Value, secret: &str) -> u16 {
+fn deliver(
+    addr: &str,
+    event: &str,
+    delivery: &str,
+    payload: &serde_json::Value,
+    secret: &str,
+) -> u16 {
     let body = serde_json::to_vec(payload).unwrap();
     let res = ureq::post(addr)
         .header("X-GitHub-Event", event)
@@ -307,10 +377,17 @@ fn a_delivery_over_http_gates_the_pr_without_anyone_running_a_command() {
     let (server, addr) = serve(&ctx);
     let worker = std::thread::spawn(move || server.handle_one());
 
-    let status = deliver(&addr, "pull_request", "d-1", &pr_payload(42, "headsha", "opened"), SECRET);
+    let status = deliver(
+        &addr,
+        "pull_request",
+        "d-1",
+        &pr_payload(42, "headsha", "opened"),
+        SECRET,
+    );
     assert_eq!(status, 202, "GitHub is answered before the Scan runs");
     let outcome = worker.join().unwrap().expect("a delivery arrived").unwrap();
-    assert!(outcome.contains("gate=failure"), "got {outcome}");
+    assert!(outcome.contains("queued acme/web pr=42"), "got {outcome}");
+    assert_eq!(drain(&ctx), 1);
 
     let dump: serde_json::Value = serde_json::from_str(&open(&ctx).github_dump()).unwrap();
     assert_eq!(dump["checks"][0]["pr"], 42);
@@ -365,7 +442,7 @@ fn the_same_delivery_twice_is_handled_once() {
     deliver(&addr, "pull_request", "d-3", &payload, SECRET);
 
     let (first, second) = worker.join().unwrap();
-    assert!(first.unwrap().unwrap().contains("gate="));
+    assert!(first.unwrap().unwrap().contains("queued"));
     let second = second.expect("a second delivery arrived").unwrap();
     assert!(second.contains("duplicate"), "got {second}");
 }

@@ -81,7 +81,9 @@ hq [OPTIONS] <COMMAND>
   reopen        Reopen a Dismissed Finding
   handle-pr     Scan a PR Revision and set the Gate check
   handle-comment  Handle dismiss/reopen commands from PR comments
-  intel-rescan  Re-scan every Target when Engine intel changes
+  intel-rescan  Queue a re-Scan of every Target when Engine intel changes
+  scans         What the Scan queue is doing: queued, running, done, failed
+  work          Run queued Scans
   fake-obs / fake-fail  Inject synthetic Observations for tests and demos
   github        App identity diagnostics: whoami, installations
   github-dump   Dump pending App actions (checks, PRs)
@@ -123,14 +125,26 @@ Every delivery's HMAC signature is verified before anything happens; an unverifi
 
 | Event | What HQ does |
 |---|---|
-| `pull_request` opened / synchronize / reopened | Gate the head Revision and write the Check Run |
+| `pull_request` opened / synchronize / reopened | Queue a Scan of the head Revision; the worker writes the Check Run |
 | `issue_comment` starting `/hq ` | Run the command — `/hq dismiss <fingerprint>` from someone who can write the Target |
 | `installation`, `installation_repositories` | Record which repos the App can reach |
 | anything else | Acknowledged and ignored |
 
 A delivery id HQ has already handled is not handled again. An event about a repo that is not Enrolled, or a Target whose Baseline is not written yet, is a no-op — Enrollment is opt-in and Baseline day fails nothing.
 
-Deliveries are handled one at a time. Concurrency needs the Scan queue, which is not built yet.
+### The Scan queue
+
+A delivery does not scan; it queues a Scan and returns. Workers claim queued Scans and run them, so a push storm across ten repos is queue depth rather than a pile of deliveries timing out, and a hung Engine on one Target does not stop the others.
+
+```sh
+hq scans                              # queued, running, done, failed, discarded — with timing
+hq work --workers 4                   # a worker process; --drain to stop once the queue is empty
+hq intel-rescan --use trivy,gitleaks  # queues one Scan per Target
+```
+
+`hq serve` runs a pool itself (`--workers`, default 2), so a single-process deployment needs nothing else. Claiming uses `FOR UPDATE SKIP LOCKED`, so two workers never take the same Scan, and a job whose worker dies stops heartbeating and becomes claimable again instead of staying stuck. Queueing the same Scan twice while the first still waits queues it once.
+
+Each Engine has a timeout (`HQ_ENGINE_TIMEOUT_SECS`, default 600). Past it the subprocess is killed and the Engine counts as failed — which fails the Gate closed. A scanner that hangs must never read as a clean Target. See [ADR 0021](docs/adr/0021-scan-queue.md).
 
 ### Remediations
 

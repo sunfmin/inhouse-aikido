@@ -1,13 +1,22 @@
+use crate::domain::PrRequest;
 use crate::domain::{
     Annotation, CheckRun, Finding, FindingKind, FindingState, Fingerprint, Observation,
     Remediation, Revision, Target, TargetId, TargetKind,
 };
-use crate::engine::{Engine, EngineError, FakeEngine};
-use crate::domain::PrRequest;
+use crate::engine::{Engine, FakeEngine};
 use crate::github::Github;
 use crate::remediation::{Remediator, SyntheticRemediator, UnconfiguredRemediator};
 use crate::store::Store;
 use crate::workspace::{Checkout, GitCheckout, Workspace};
+
+/// What one Scan saw. Engines that failed are named, so a Gate can fail closed
+/// instead of treating silence as cleanliness.
+#[derive(Debug, Clone)]
+pub struct ScanOutcome {
+    pub revision: Revision,
+    pub observations: Vec<Observation>,
+    pub failed_engines: Vec<String>,
+}
 
 pub struct Hq {
     pub store: Store,
@@ -168,7 +177,7 @@ impl Hq {
         self.scan_with(name, revision, &engines, workspace, is_pr)
     }
 
-    fn select_engines(&self, names: &[&str]) -> Vec<Box<dyn Engine>> {
+    pub fn select_engines(&self, names: &[&str]) -> Vec<Box<dyn Engine>> {
         let mut out: Vec<Box<dyn Engine>> = Vec::new();
         for name in names {
             match *name {
@@ -193,6 +202,27 @@ impl Hq {
         workspace: Option<&std::path::Path>,
         is_pr: bool,
     ) -> Result<String, String> {
+        let outcome = self.observe(name, revision, engines, workspace)?;
+        if !outcome.failed_engines.is_empty() {
+            return Err(format!(
+                "engines failed: {}",
+                outcome.failed_engines.join(",")
+            ));
+        }
+        self.record(name, revision, &outcome, is_pr)
+    }
+
+    /// Run Engines against a Revision and report what they saw.
+    ///
+    /// This is the slow half of a Scan — a clone and one subprocess per Engine —
+    /// and it writes nothing, so a queue worker can do it off HQ's write path.
+    pub fn observe(
+        &mut self,
+        name: &str,
+        revision: Option<&str>,
+        engines: &[Box<dyn Engine>],
+        workspace: Option<&std::path::Path>,
+    ) -> Result<ScanOutcome, String> {
         let target = self
             .store
             .state
@@ -222,14 +252,42 @@ impl Hq {
         for engine in engines {
             match engine.scan(&target, &rev, workspace) {
                 Ok(mut obs) => observations.append(&mut obs),
-                Err(EngineError::Failed(n)) | Err(EngineError::Other(n)) => failed.push(n),
+                // A timeout is a failed Engine like any other: the Gate must
+                // fail closed rather than call a hung scanner clean.
+                Err(e) => failed.push(e.engine()),
             }
         }
-        if !failed.is_empty() {
-            return Err(format!("engines failed: {}", failed.join(",")));
-        }
+        Ok(ScanOutcome {
+            revision: rev,
+            observations,
+            failed_engines: failed,
+        })
+    }
+
+    /// Fold what a Scan saw into HQ's Findings. The fast half, and the only half
+    /// that writes.
+    pub fn record(
+        &mut self,
+        name: &str,
+        revision: Option<&str>,
+        outcome: &ScanOutcome,
+        is_pr: bool,
+    ) -> Result<String, String> {
+        let target = self
+            .store
+            .state
+            .targets
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("not enrolled: {name}"))?;
+        let rev = Revision(
+            revision
+                .unwrap_or(target.default_revision.0.as_str())
+                .to_string(),
+        );
+        let observations = &outcome.observations;
         let was_baseline = target.baseline_ready;
-        self.apply_observations(name, &rev, &observations, is_pr);
+        self.apply_observations(name, &rev, observations, is_pr);
         let mut msg = format!(
             "scanned {name}@{} observations={}",
             rev.0,
@@ -403,22 +461,20 @@ impl Hq {
             {
                 continue;
             }
-            let prepared = match self.remediator.prepare(
-                target,
-                &default_rev,
-                &manifest,
-                &package,
-                &fixed,
-            ) {
-                Ok(Some(prepared)) => prepared,
-                // An ecosystem HQ cannot pin gets no Remediation. A placeholder
-                // edit that looks like a fix is worse than none.
-                Ok(None) => {
-                    skipped.push(manifest.clone());
-                    continue;
-                }
-                Err(e) => return Err(format!("cannot prepare a pin for {package}: {e}")),
-            };
+            let prepared =
+                match self
+                    .remediator
+                    .prepare(target, &default_rev, &manifest, &package, &fixed)
+                {
+                    Ok(Some(prepared)) => prepared,
+                    // An ecosystem HQ cannot pin gets no Remediation. A placeholder
+                    // edit that looks like a fix is worse than none.
+                    Ok(None) => {
+                        skipped.push(manifest.clone());
+                        continue;
+                    }
+                    Err(e) => return Err(format!("cannot prepare a pin for {package}: {e}")),
+                };
             let title = format!("Remediation: pin {package} to {fixed} in {manifest}");
             let body = format!(
                 "Safe pin-bump for {}.\n\nFindings:\n{}",
@@ -644,6 +700,29 @@ impl Hq {
         }
     }
 
+    /// Post the Gate for a Scan somebody else already ran — the queue worker
+    /// path, where `observe` happened on a worker thread and only the folding-in
+    /// happens here, under HQ's write lock.
+    pub fn record_gate(
+        &mut self,
+        repo: &str,
+        pr: u64,
+        head: &str,
+        outcome: &ScanOutcome,
+    ) -> Result<String, String> {
+        if !self.store.state.targets.contains_key(repo) {
+            return Err(format!("not enrolled: {repo}"));
+        }
+        if !self.store.state.targets[repo].baseline_ready {
+            return Err("baseline not ready".into());
+        }
+        if !outcome.failed_engines.is_empty() {
+            return self.post_gate(repo, pr, head, true, &[]);
+        }
+        self.record(repo, Some(head), outcome, true)?;
+        self.post_gate(repo, pr, head, false, &[])
+    }
+
     fn post_gate(
         &mut self,
         repo: &str,
@@ -798,6 +877,40 @@ impl Hq {
                 Ok(m) => out.push(m),
                 Err(e) => out.push(format!("{name}: {e}")),
             }
+        }
+        if out.is_empty() {
+            Ok("no targets".into())
+        } else {
+            Ok(out.join("\n"))
+        }
+    }
+
+    /// Queue a Scan of every Target's default Revision.
+    ///
+    /// Intel moves — a CVE published today makes yesterday's clean Scan wrong —
+    /// so every Target is rescanned. They go on the queue rather than running
+    /// one after another, so a thousand Targets is a throughput problem for the
+    /// workers and not a command that runs for a day.
+    pub fn queue_rescan(&mut self, engines: &[&str]) -> Result<String, String> {
+        let queue = self.store.queue();
+        let mut out = Vec::new();
+        let targets: Vec<(String, String)> = self
+            .store
+            .state
+            .targets
+            .iter()
+            .map(|(name, t)| (name.clone(), t.default_revision.0.clone()))
+            .collect();
+        for (name, revision) in targets {
+            let id = queue.enqueue(&crate::queue::JobRequest {
+                target: name.clone(),
+                revision: revision.clone(),
+                engines: engines.iter().map(|e| e.to_string()).collect(),
+                purpose: crate::queue::Purpose::Default,
+                pr_number: None,
+                base_revision: None,
+            })?;
+            out.push(format!("queued {name}@{revision} scan={id}"));
         }
         if out.is_empty() {
             Ok("no targets".into())

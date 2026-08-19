@@ -97,6 +97,24 @@ CREATE TABLE IF NOT EXISTS app_installations (
   repo TEXT PRIMARY KEY,
   installation_id BIGINT NOT NULL
 );
+-- Scans waiting for, or held by, a worker.
+CREATE TABLE IF NOT EXISTS scan_jobs (
+  id BIGSERIAL PRIMARY KEY,
+  target TEXT NOT NULL,
+  revision TEXT NOT NULL,
+  engines TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  pr_number BIGINT,
+  base_revision TEXT,
+  state TEXT NOT NULL DEFAULT 'queued',
+  claimed_by TEXT,
+  note TEXT,
+  queued_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  started_at TIMESTAMPTZ,
+  heartbeat TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS scan_jobs_queued ON scan_jobs (state, queued_at);
 -- Added after the first release; run after every CREATE above.
 ALTER TABLE observations ADD COLUMN IF NOT EXISTS line INTEGER;
 ALTER TABLE github_checks ADD COLUMN IF NOT EXISTS head_sha TEXT NOT NULL DEFAULT '';
@@ -231,6 +249,19 @@ impl Store {
             .into_iter()
             .map(|r| (r.get(0), r.get::<_, i64>(1) as u64))
             .collect())
+    }
+
+    /// The Scan queue in this schema.
+    pub fn queue(&self) -> crate::queue::Queue {
+        crate::queue::Queue::new(&self.url, &self.schema)
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub fn schema(&self) -> &str {
+        &self.schema
     }
 
     fn client(&self) -> Result<Client, String> {
