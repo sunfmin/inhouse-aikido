@@ -82,10 +82,26 @@ hq [OPTIONS] <COMMAND>
   handle-comment  Handle dismiss/reopen commands from PR comments
   intel-rescan  Re-scan every Target when Engine intel changes
   fake-obs / fake-fail  Inject synthetic Observations for tests and demos
+  github        App identity diagnostics: whoami, installations
   github-dump   Dump pending App actions (checks, PRs)
 ```
 
 Run `hq <command> --help` for details. Note `github-dump`, `handle-pr`, and `handle-comment` use a fake GitHub backend for local development; the real App wiring is in progress.
+
+### The GitHub App
+
+HQ authenticates as a GitHub App, never as a person. Point it at the App's credentials and check the wiring — `hq github` needs no database:
+
+```sh
+export HQ_GITHUB_APP_ID=123456
+export HQ_GITHUB_PRIVATE_KEY_PATH=/path/to/app.private-key.pem   # or HQ_GITHUB_PRIVATE_KEY inline
+export HQ_GITHUB_API_BASE=https://api.github.com                 # override for GitHub Enterprise
+
+hq github whoami          # the App HQ authenticates as
+hq github installations   # installations and the repos each one covers
+```
+
+HQ mints a short-lived RS256 JWT from the private key, exchanges it for an installation access token, and reuses that token until it nears the expiry GitHub reports. See [ADR 0020](docs/adr/0020-synchronous-http-stack.md) for why the HTTP stack is synchronous.
 
 ## Agent interface
 

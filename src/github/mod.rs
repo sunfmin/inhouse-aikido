@@ -1,3 +1,5 @@
+pub mod app;
+
 use crate::domain::{CheckRun, OpenedPr, PrFile};
 use serde::{Deserialize, Serialize};
 

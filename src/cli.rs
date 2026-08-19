@@ -1,4 +1,5 @@
 use crate::domain::{FindingKind, Fingerprint, Observation, TargetKind};
+use crate::github::app::AppAuth;
 use crate::service::Hq;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -121,6 +122,19 @@ pub enum Cmd {
         workspace: Option<PathBuf>,
     },
     GithubDump,
+    /// App identity and installation diagnostics. Needs no database.
+    Github {
+        #[command(subcommand)]
+        sub: GithubCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum GithubCmd {
+    /// Print the App HQ authenticates as.
+    Whoami,
+    /// List the App's installations and the repositories each one covers.
+    Installations,
 }
 
 pub fn run<I, T>(args: I) -> Result<String, String>
@@ -129,10 +143,64 @@ where
     T: Into<std::ffi::OsString> + Clone,
 {
     let cli = Cli::try_parse_from(args).map_err(|e| e.to_string())?;
+    // Diagnostics answer "is the App wired up", which is true or false before
+    // HQ has any Target, so they do not open the Store.
+    if let Cmd::Github { sub } = &cli.cmd {
+        return github_cmd(sub);
+    }
     let mut hq = Hq::open(&cli.database_url, &cli.schema)?;
     let out = dispatch(&mut hq, cli.cmd)?;
     hq.save()?;
     Ok(out)
+}
+
+fn github_cmd(sub: &GithubCmd) -> Result<String, String> {
+    let mut auth = AppAuth::from_env()?;
+    match sub {
+        GithubCmd::Whoami => {
+            let app = auth.app_identity()?;
+            let slug = app.slug.as_deref().unwrap_or("-");
+            let owner = app.owner.as_ref().map(|o| o.login.as_str()).unwrap_or("-");
+            Ok(format!(
+                "app id={} slug={} owner={} name={:?}",
+                app.id, slug, owner, app.name
+            ))
+        }
+        GithubCmd::Installations => {
+            let installs = auth.installations()?;
+            if installs.is_empty() {
+                return Ok("no installations".into());
+            }
+            let mut out = Vec::new();
+            for install in installs {
+                let account = install
+                    .account
+                    .as_ref()
+                    .map(|a| a.login.as_str())
+                    .unwrap_or("-");
+                let selection = install.repository_selection.as_deref().unwrap_or("-");
+                match auth.installation_repos(install.id) {
+                    Ok(repos) => {
+                        out.push(format!(
+                            "installation id={} account={} selection={} repos={}",
+                            install.id,
+                            account,
+                            selection,
+                            repos.len()
+                        ));
+                        for repo in repos {
+                            out.push(format!("  {repo}"));
+                        }
+                    }
+                    Err(e) => out.push(format!(
+                        "installation id={} account={} selection={} repos=? ({e})",
+                        install.id, account, selection
+                    )),
+                }
+            }
+            Ok(out.join("\n"))
+        }
+    }
 }
 
 fn parse_kind(s: &str) -> Result<FindingKind, String> {
@@ -265,5 +333,7 @@ fn dispatch(hq: &mut Hq, cmd: Cmd) -> Result<String, String> {
             hq.intel_rescan_named(&names, workspace.as_deref())
         }
         Cmd::GithubDump => Ok(hq.github_dump()),
+        // Handled before the Store is opened.
+        Cmd::Github { sub } => github_cmd(&sub),
     }
 }
