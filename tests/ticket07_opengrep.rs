@@ -19,7 +19,7 @@ fn opengrep_parser_uses_source_path() {
 #[test]
 fn opengrep_line_move_same_finding() {
     use common::hq_ok;
-        let ctx = common::Ctx::new();
+    let ctx = common::Ctx::new();
     hq_ok(&ctx, &["enroll", "github", "acme/api", "--revision", "a"]);
     hq_ok(
         &ctx,
@@ -65,7 +65,10 @@ fn opengrep_real_binary_scan() {
     use common::hq_ok;
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sast");
     let ctx = common::Ctx::new();
-    hq_ok(&ctx, &["enroll", "github", "sast-demo", "--revision", "main"]);
+    hq_ok(
+        &ctx,
+        &["enroll", "github", "sast-demo", "--revision", "main"],
+    );
     hq_ok(&ctx, &["scan", "sast-demo"]);
     let out = hq_ok(
         &ctx,

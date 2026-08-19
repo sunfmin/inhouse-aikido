@@ -219,8 +219,8 @@ impl Tokens for FixedToken {
 fn the_installation_token_never_reaches_disk() {
     let origin = Origin::new();
     let token = "ghs_thisisthesecrettoken";
-    let mut checkout = GitCheckout::new(Box::new(FixedToken(token.into())))
-        .with_clone_base(origin.clone_base());
+    let mut checkout =
+        GitCheckout::new(Box::new(FixedToken(token.into()))).with_clone_base(origin.clone_base());
 
     let workspace = checkout.checkout("acme/web", "main").expect("checkout");
 

@@ -38,7 +38,13 @@ pub trait Remediator: Send + Sync {
 pub fn branch_name(package: &str, version: &str) -> String {
     let slug: String = format!("{package}-{version}")
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     format!("hq/pin-{slug}")
 }
@@ -76,11 +82,7 @@ impl Npm {
     /// Which section a pin goes in, without touching disk.
     pub fn placement(manifest: &serde_json::Value, package: &str) -> NpmPin {
         for section in ["dependencies", "devDependencies", "optionalDependencies"] {
-            if manifest
-                .get(section)
-                .and_then(|d| d.get(package))
-                .is_some()
-            {
+            if manifest.get(section).and_then(|d| d.get(package)).is_some() {
                 // The section names are literals above, so this is always one of them.
                 let named: &'static str = match section {
                     "dependencies" => "dependencies",
@@ -95,11 +97,7 @@ impl Npm {
 
     /// Apply the pin to a package.json's text, preserving key order so the diff
     /// a Developer reviews is one line.
-    pub fn edit_package_json(
-        source: &str,
-        package: &str,
-        version: &str,
-    ) -> Result<String, String> {
+    pub fn edit_package_json(source: &str, package: &str, version: &str) -> Result<String, String> {
         let mut doc: serde_json::Value =
             serde_json::from_str(source).map_err(|e| format!("package.json is not JSON: {e}"))?;
         if !doc.is_object() {
@@ -129,7 +127,10 @@ impl Ecosystem for Npm {
 
     fn owns(&self, manifest: &str) -> bool {
         let file = manifest.rsplit('/').next().unwrap_or(manifest);
-        matches!(file, "package-lock.json" | "npm-shrinkwrap.json" | "package.json")
+        matches!(
+            file,
+            "package-lock.json" | "npm-shrinkwrap.json" | "package.json"
+        )
     }
 
     fn pin(

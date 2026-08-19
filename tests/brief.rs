@@ -4,7 +4,10 @@ use common::hq_ok;
 #[test]
 fn findings_json_and_brief_pick_secret_first() {
     let ctx = common::Ctx::new();
-    hq_ok(&ctx, &["enroll", "github", "acme/api", "--revision", "main"]);
+    hq_ok(
+        &ctx,
+        &["enroll", "github", "acme/api", "--revision", "main"],
+    );
     hq_ok(
         &ctx,
         &[
@@ -75,10 +78,7 @@ fn findings_json_and_brief_pick_secret_first() {
     assert!(brief.contains("Do not `hq dismiss`"));
     assert!(!brief.contains("CVE-1") || brief.contains("github-pat"));
 
-    let sca = hq_ok(
-        &ctx,
-        &["brief", "acme/api|CVE-1|pnpm-lock.yaml::hono"],
-    );
+    let sca = hq_ok(&ctx, &["brief", "acme/api|CVE-1|pnpm-lock.yaml::hono"]);
     assert!(sca.contains("Pin hono to 4.0.0"));
     assert!(sca.contains("4.0.0"));
 

@@ -4,7 +4,10 @@ use common::hq_ok;
 #[test]
 fn remediation_one_pin_many_findings_no_secrets() {
     let ctx = common::Ctx::new();
-    hq_ok(&ctx, &["enroll", "github", "acme/api", "--revision", "main"]);
+    hq_ok(
+        &ctx,
+        &["enroll", "github", "acme/api", "--revision", "main"],
+    );
     hq_ok(
         &ctx,
         &[

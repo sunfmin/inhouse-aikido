@@ -5,7 +5,10 @@ use common::{hq_ok, stdout};
 fn gate_fails_only_on_new_open_findings() {
     let ctx = common::Ctx::new();
 
-    hq_ok(&ctx, &["enroll", "github", "acme/api", "--revision", "main"]);
+    hq_ok(
+        &ctx,
+        &["enroll", "github", "acme/api", "--revision", "main"],
+    );
     hq_ok(
         &ctx,
         &[
@@ -164,10 +167,23 @@ fn gate_fails_only_on_new_open_findings() {
 #[test]
 fn gate_refuses_before_baseline() {
     let ctx = common::Ctx::new();
-    hq_ok(&ctx, &["enroll", "github", "acme/api", "--revision", "main"]);
+    hq_ok(
+        &ctx,
+        &["enroll", "github", "acme/api", "--revision", "main"],
+    );
     let out = common::hq(
         &ctx,
-        &["handle-pr", "--repo", "acme/api", "--number", "1", "--head", "x", "--base", "main"],
+        &[
+            "handle-pr",
+            "--repo",
+            "acme/api",
+            "--number",
+            "1",
+            "--head",
+            "x",
+            "--base",
+            "main",
+        ],
     );
     assert!(!out.status.success());
     assert!(common::stderr(&out).contains("baseline not ready"));
@@ -176,7 +192,10 @@ fn gate_refuses_before_baseline() {
 #[test]
 fn gate_fails_closed_when_engines_fail() {
     let ctx = common::Ctx::new();
-    hq_ok(&ctx, &["enroll", "github", "acme/api", "--revision", "main"]);
+    hq_ok(
+        &ctx,
+        &["enroll", "github", "acme/api", "--revision", "main"],
+    );
     hq_ok(&ctx, &["scan", "acme/api"]);
     hq_ok(&ctx, &["fake-fail", "acme/api", "broken"]);
     let out = hq_ok(

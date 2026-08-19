@@ -34,7 +34,10 @@ fn trivy_parser_two_manifests_are_two_findings() {
 #[test]
 fn trivy_same_cve_two_lockfiles_via_cli() {
     let ctx = common::Ctx::new();
-    hq_ok(&ctx, &["enroll", "github", "acme/mono", "--revision", "main"]);
+    hq_ok(
+        &ctx,
+        &["enroll", "github", "acme/mono", "--revision", "main"],
+    );
     hq_ok(
         &ctx,
         &[
@@ -165,7 +168,10 @@ fn version_bump_same_cve_same_finding() {
 #[test]
 fn later_scan_without_observation_marks_fixed() {
     let ctx = common::Ctx::new();
-    hq_ok(&ctx, &["enroll", "github", "acme/api", "--revision", "main"]);
+    hq_ok(
+        &ctx,
+        &["enroll", "github", "acme/api", "--revision", "main"],
+    );
     hq_ok(
         &ctx,
         &[
@@ -193,7 +199,10 @@ fn later_scan_without_observation_marks_fixed() {
 fn trivy_real_binary_scan() {
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lockfile");
     let ctx = common::Ctx::new();
-    hq_ok(&ctx, &["enroll", "github", "lock-demo", "--revision", "main"]);
+    hq_ok(
+        &ctx,
+        &["enroll", "github", "lock-demo", "--revision", "main"],
+    );
     hq_ok(&ctx, &["scan", "lock-demo"]);
     let out = hq_ok(
         &ctx,

@@ -88,7 +88,12 @@ fn a_new_finding_fails_the_gate_and_annotates_the_file_it_is_in() {
     hq.add_fake_obs(
         "acme/web",
         "headsha2",
-        obs("gitleaks:aws-key", "src/config.js", FindingKind::Secret, Some(42)),
+        obs(
+            "gitleaks:aws-key",
+            "src/config.js",
+            FindingKind::Secret,
+            Some(42),
+        ),
     );
     hq.handle_pr("acme/web", 12, "headsha2", "main").unwrap();
 
@@ -219,8 +224,14 @@ fn more_annotations_than_one_request_allows_are_batched_not_dropped() {
     assert_eq!(posted.len(), 1);
     assert_eq!(patched.len(), 1, "the remainder goes up as an update");
 
-    let first = posted[0].body["output"]["annotations"].as_array().unwrap().len();
-    let rest = patched[0].body["output"]["annotations"].as_array().unwrap().len();
+    let first = posted[0].body["output"]["annotations"]
+        .as_array()
+        .unwrap()
+        .len();
+    let rest = patched[0].body["output"]["annotations"]
+        .as_array()
+        .unwrap()
+        .len();
     assert_eq!(first, 50, "GitHub takes 50 annotations per request");
     assert_eq!(first + rest, 60, "every Finding is annotated");
 }

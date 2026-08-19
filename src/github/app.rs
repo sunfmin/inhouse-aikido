@@ -70,9 +70,11 @@ impl AppConfig {
             (_, Ok(path)) => std::fs::read_to_string(&path)
                 .map_err(|e| format!("cannot read the App private key at {path}: {e}"))?,
             _ => {
-                return Err("neither HQ_GITHUB_PRIVATE_KEY nor HQ_GITHUB_PRIVATE_KEY_PATH is set \
+                return Err(
+                    "neither HQ_GITHUB_PRIVATE_KEY nor HQ_GITHUB_PRIVATE_KEY_PATH is set \
                             — HQ needs the App's private key"
-                    .into())
+                        .into(),
+                )
             }
         };
         let api_base =

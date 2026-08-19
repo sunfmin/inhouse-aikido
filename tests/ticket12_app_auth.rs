@@ -46,7 +46,10 @@ fn app_jwt_is_signed_with_the_app_key_and_names_the_app() {
         assert!(claims.iat < 1_700_000_000);
         // GitHub rejects anything longer than ten minutes.
         assert!(claims.exp > 1_700_000_000);
-        assert!(claims.exp - claims.iat <= 600, "jwt lifetime under 10 minutes");
+        assert!(
+            claims.exp - claims.iat <= 600,
+            "jwt lifetime under 10 minutes"
+        );
     }
 }
 
@@ -131,7 +134,9 @@ fn whoami_and_installations_read_the_api_as_the_app() {
     assert_eq!(installs[0].id, 7);
     assert_eq!(installs[0].account.as_ref().unwrap().login, "acme");
 
-    let repos = auth.installation_repos(7).expect("installation repositories");
+    let repos = auth
+        .installation_repos(7)
+        .expect("installation repositories");
     assert_eq!(repos, vec!["acme/web", "acme/worker"]);
 
     let install = auth
@@ -198,5 +203,10 @@ fn real_github_accepts_our_app_jwt() {
     let app = auth.app_identity().expect("GitHub accepts the App JWT");
     assert!(app.id > 0);
     let installs = auth.installations().expect("list installations");
-    println!("app {} ({}) installations={}", app.name, app.id, installs.len());
+    println!(
+        "app {} ({}) installations={}",
+        app.name,
+        app.id,
+        installs.len()
+    );
 }

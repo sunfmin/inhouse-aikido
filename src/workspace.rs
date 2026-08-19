@@ -60,7 +60,9 @@ impl Tokens for Anonymous {
 
 impl Tokens for Arc<Mutex<AppAuth>> {
     fn token_for(&mut self, repo: &str) -> Result<Option<String>, String> {
-        let mut auth = self.lock().map_err(|_| "App auth is poisoned".to_string())?;
+        let mut auth = self
+            .lock()
+            .map_err(|_| "App auth is poisoned".to_string())?;
         let installation = auth.installation_id_for_repo(repo)?;
         auth.installation_token(installation).map(Some)
     }
@@ -111,7 +113,10 @@ fn git(dir: &Path, token: Option<&str>, args: &[&str]) -> Result<(), String> {
             .encode(format!("x-access-token:{token}").as_bytes());
         cmd.env("GIT_CONFIG_COUNT", "1")
             .env("GIT_CONFIG_KEY_0", "http.extraheader")
-            .env("GIT_CONFIG_VALUE_0", format!("Authorization: Basic {basic}"));
+            .env(
+                "GIT_CONFIG_VALUE_0",
+                format!("Authorization: Basic {basic}"),
+            );
     }
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     let out = cmd
@@ -191,7 +196,13 @@ impl Checkout for GitCheckout {
         git(
             workspace,
             token.as_deref(),
-            &["push", "--quiet", "--force", "origin", &format!("HEAD:refs/heads/{branch}")],
+            &[
+                "push",
+                "--quiet",
+                "--force",
+                "origin",
+                &format!("HEAD:refs/heads/{branch}"),
+            ],
         )
     }
 }

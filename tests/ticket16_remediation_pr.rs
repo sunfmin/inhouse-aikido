@@ -39,7 +39,10 @@ fn a_declared_dependency_is_pinned_where_it_is_declared() {
     let out = Npm::edit_package_json(MANIFEST, "lodash", "4.17.21").unwrap();
     let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(doc["dependencies"]["lodash"], "4.17.21");
-    assert_eq!(doc["dependencies"]["express"], "^4.18.0", "nothing else moves");
+    assert_eq!(
+        doc["dependencies"]["express"], "^4.18.0",
+        "nothing else moves"
+    );
     assert!(doc.get("overrides").is_none(), "no override is needed");
     // The diff a Developer reviews should be one line, so key order survives.
     assert!(
@@ -67,8 +70,14 @@ fn a_package_the_target_never_declared_becomes_an_override() {
 
     let parsed: serde_json::Value = serde_json::from_str(MANIFEST).unwrap();
     assert_eq!(Npm::placement(&parsed, "minimist"), NpmPin::Override);
-    assert_eq!(Npm::placement(&parsed, "lodash"), NpmPin::Direct("dependencies"));
-    assert_eq!(Npm::placement(&parsed, "jest"), NpmPin::Direct("devDependencies"));
+    assert_eq!(
+        Npm::placement(&parsed, "lodash"),
+        NpmPin::Direct("dependencies")
+    );
+    assert_eq!(
+        Npm::placement(&parsed, "jest"),
+        NpmPin::Direct("devDependencies")
+    );
 }
 
 #[test]
@@ -273,7 +282,10 @@ fn one_pin_is_one_pr_even_when_it_fixes_several_findings() {
     let opened = stub.calls_to("POST", "/pulls");
     assert_eq!(opened.len(), 1);
     let body = opened[0].body["body"].as_str().unwrap();
-    assert!(body.contains("CVE-2024-1"), "the PR lists what it fixes: {body}");
+    assert!(
+        body.contains("CVE-2024-1"),
+        "the PR lists what it fixes: {body}"
+    );
     assert!(body.contains("CVE-2024-2"), "{body}");
     assert_eq!(opened[0].body["head"], "hq/pin-lodash-4.17.21");
     assert_eq!(opened[0].body["base"], "main");
@@ -299,7 +311,11 @@ fn a_different_package_is_a_different_pr() {
     hq.scan("acme/web", None).unwrap();
 
     let opened = stub.calls_to("POST", "/pulls");
-    assert_eq!(opened.len(), 2, "a bad lodash bump must not block a good one");
+    assert_eq!(
+        opened.len(),
+        2,
+        "a bad lodash bump must not block a good one"
+    );
     let heads: Vec<&str> = opened
         .iter()
         .map(|c| c.body["head"].as_str().unwrap())

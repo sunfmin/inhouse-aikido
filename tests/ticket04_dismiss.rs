@@ -4,7 +4,10 @@ use common::hq_ok;
 #[test]
 fn dismiss_on_pr_reopen_from_cli() {
     let ctx = common::Ctx::new();
-    hq_ok(&ctx, &["enroll", "github", "acme/api", "--revision", "main"]);
+    hq_ok(
+        &ctx,
+        &["enroll", "github", "acme/api", "--revision", "main"],
+    );
     hq_ok(&ctx, &["scan", "acme/api"]);
 
     hq_ok(

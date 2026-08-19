@@ -102,7 +102,8 @@ impl GithubStub {
                     (200, app_json())
                 } else if route == "/app/installations" {
                     (200, installations_json())
-                } else if route.starts_with("/app/installations/") && route.ends_with("/access_tokens")
+                } else if route.starts_with("/app/installations/")
+                    && route.ends_with("/access_tokens")
                 {
                     let expiry = if options.stale_first_token && token_calls == 0 {
                         "2000-01-01T00:00:00Z"
@@ -119,7 +120,10 @@ impl GithubStub {
                     (200, repositories_json())
                 } else if route.ends_with("/installation") && route.starts_with("/repos/") {
                     // GitHub 404s for a repo the App is not installed on.
-                    if KNOWN_REPOS.iter().any(|r| route == format!("/repos/{r}/installation")) {
+                    if KNOWN_REPOS
+                        .iter()
+                        .any(|r| route == format!("/repos/{r}/installation"))
+                    {
                         (200, installation_json())
                     } else {
                         (404, r#"{"message":"Not Found"}"#.to_string())
@@ -131,7 +135,10 @@ impl GithubStub {
                         .and_then(|r| r.split('/').next())
                         .unwrap_or("");
                     match checks.get(sha) {
-                        Some(id) => (200, format!(r#"{{"total_count":1,"check_runs":[{{"id":{id}}}]}}"#)),
+                        Some(id) => (
+                            200,
+                            format!(r#"{{"total_count":1,"check_runs":[{{"id":{id}}}]}}"#),
+                        ),
                         None => (200, r#"{"total_count":0,"check_runs":[]}"#.to_string()),
                     }
                 } else if route.ends_with("/check-runs") && method == "POST" {
@@ -149,14 +156,20 @@ impl GithubStub {
                     if options.reject_check_writes {
                         (500, r#"{"message":"Server Error"}"#.to_string())
                     } else {
-                        let id: u64 = route.rsplit('/').next().and_then(|s| s.parse().ok()).unwrap_or(0);
+                        let id: u64 = route
+                            .rsplit('/')
+                            .next()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0);
                         (200, format!(r#"{{"id":{id},"name":"hq"}}"#))
                     }
                 } else if route.ends_with("/pulls") && method == "POST" {
                     let n = next_pr;
                     next_pr += 1;
                     (201, format!(r#"{{"number":{n},"state":"open"}}"#))
-                } else if route.starts_with("/repos/") && route.contains("/pulls") && method == "GET"
+                } else if route.starts_with("/repos/")
+                    && route.contains("/pulls")
+                    && method == "GET"
                 {
                     (200, "[]".to_string())
                 } else {
