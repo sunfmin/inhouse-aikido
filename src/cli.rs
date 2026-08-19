@@ -27,6 +27,10 @@ pub struct Cli {
     /// own provider and nowhere else, and is an Operator's decision to make.
     #[arg(long, env = "HQ_VERIFY_SECRETS", default_value = "off")]
     pub verify_secrets: String,
+    /// Slack incoming webhook for the digest of Findings that open on a
+    /// default Revision. Unset means no digest, and HQ behaves as it always did.
+    #[arg(long, env = "HQ_SLACK_WEBHOOK")]
+    pub slack_webhook: Option<String>,
     #[command(subcommand)]
     pub cmd: Cmd,
 }
@@ -265,13 +269,19 @@ where
 }
 
 fn open_hq(cli: &Cli) -> Result<Hq, String> {
-    Ok(open_hq_for(
+    let hq = open_hq_for(
         &cli.database_url,
         &cli.schema,
         &cli.github_backend,
         &cli.intel_backend,
     )?
-    .with_verifier(secret_verifier(&cli.verify_secrets)?))
+    .with_verifier(secret_verifier(&cli.verify_secrets)?);
+    Ok(
+        match cli.slack_webhook.as_deref().filter(|u| !u.is_empty()) {
+            Some(url) => hq.with_notifier(Box::new(crate::notify::SlackWebhook::new(url))),
+            None => hq,
+        },
+    )
 }
 
 /// Open HQ on the named backend. Shared with `hq serve`, which opens one per

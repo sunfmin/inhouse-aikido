@@ -115,6 +115,11 @@ CREATE TABLE IF NOT EXISTS scan_jobs (
   finished_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS scan_jobs_queued ON scan_jobs (state, queued_at);
+-- Findings HQ has already announced, so a re-Scan does not announce them again.
+CREATE TABLE IF NOT EXISTS announced_findings (
+  fp TEXT PRIMARY KEY,
+  announced_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 -- Public exploitability intel, cached so one Scan does not fetch per Finding.
 CREATE TABLE IF NOT EXISTS cve_intel (
   cve TEXT PRIMARY KEY,
@@ -321,6 +326,39 @@ impl Store {
                        known_exploited = EXCLUDED.known_exploited,
                        fetched_at = EXCLUDED.fetched_at",
                     &[cve, &data.epss, &data.percentile, &data.known_exploited],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// Which of these Findings have already been announced. Not part of HQ's
+    /// state — announcing twice is the failure mode, and `save` must never
+    /// truncate the record that prevents it.
+    pub fn already_announced(
+        &self,
+        fps: &[String],
+    ) -> Result<std::collections::HashSet<String>, String> {
+        if fps.is_empty() {
+            return Ok(std::collections::HashSet::new());
+        }
+        let mut client = self.client()?;
+        let rows = client
+            .query(
+                "SELECT fp FROM announced_findings WHERE fp = ANY($1)",
+                &[&fps],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(rows.into_iter().map(|r| r.get(0)).collect())
+    }
+
+    pub fn remember_announced(&self, fps: &[String]) -> Result<(), String> {
+        let mut client = self.client()?;
+        for fp in fps {
+            client
+                .execute(
+                    "INSERT INTO announced_findings (fp) VALUES ($1) ON CONFLICT DO NOTHING",
+                    &[fp],
                 )
                 .map_err(|e| e.to_string())?;
         }

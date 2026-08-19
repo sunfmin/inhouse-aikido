@@ -6,6 +6,7 @@ use crate::domain::{
 use crate::engine::{Engine, FakeEngine};
 use crate::github::Github;
 use crate::intel::{CveIntel, IntelSource, NoIntel};
+use crate::notify::{Notifier, Silent};
 use crate::remediation::{Remediator, SyntheticRemediator, UnconfiguredRemediator};
 use crate::store::Store;
 use crate::verify::{NoVerification, SecretVerifier};
@@ -42,6 +43,27 @@ pub struct Hq {
     /// Whether a leaked credential still authenticates. Off by default: HQ does
     /// not hand a Target's secrets to a third party unasked.
     pub verifier: Box<dyn SecretVerifier>,
+    /// Where a digest goes when a Scan of a default Revision opens Findings.
+    pub notifier: Box<dyn Notifier>,
+}
+
+/// One message, most urgent first, with the Fingerprint to act on.
+fn digest(target: &str, findings: &[&Finding]) -> String {
+    let mut out = format!(
+        "*{target}* — {} new Finding{} on the default Revision",
+        findings.len(),
+        if findings.len() == 1 { "" } else { "s" }
+    );
+    for f in findings {
+        out.push_str(&format!(
+            "\n• {:?} `{}` — {} — `{}`",
+            f.kind,
+            f.fingerprint.problem_id,
+            f.risk_summary(),
+            f.fingerprint.display()
+        ));
+    }
+    out
 }
 
 /// What a Developer reads first on the PR: how bad it is, whether anyone is
@@ -105,6 +127,9 @@ impl Hq {
             intel: Box::new(NoIntel),
             intel_ttl: default_intel_ttl(),
             verifier: Box::new(NoVerification),
+            // Configured by the caller; a Scan run from a library never posts
+            // anywhere by accident.
+            notifier: Box::new(Silent),
         })
     }
 
@@ -124,6 +149,9 @@ impl Hq {
             intel: Box::new(NoIntel),
             intel_ttl: default_intel_ttl(),
             verifier: Box::new(NoVerification),
+            // Configured by the caller; a Scan run from a library never posts
+            // anywhere by accident.
+            notifier: Box::new(Silent),
         })
     }
 
@@ -146,6 +174,11 @@ impl Hq {
 
     pub fn with_verifier(mut self, verifier: Box<dyn SecretVerifier>) -> Self {
         self.verifier = verifier;
+        self
+    }
+
+    pub fn with_notifier(mut self, notifier: Box<dyn Notifier>) -> Self {
+        self.notifier = notifier;
         self
     }
 
@@ -419,6 +452,14 @@ impl Hq {
                 msg.push_str(&format!(" unpinnable={}", unpinnable.join(",")));
             }
         }
+        // Every Scan of a default Revision keeps the ledger current, Baseline
+        // day included — otherwise turning the digest on years later would
+        // announce a Target's whole history at once.
+        if !is_pr && rev.0 == self.store.state.targets[name].default_revision.0 {
+            if let Some(announced) = self.account_for_findings(name, was_baseline)? {
+                msg.push_str(&format!(" announced={announced}"));
+            }
+        }
         Ok(msg)
     }
 
@@ -463,6 +504,67 @@ impl Hq {
             Err(e) => eprintln!("hq: intel unavailable, ranking on engine severity only: {e}"),
         }
         known
+    }
+
+    /// Tell somebody about Findings that opened on a default Revision.
+    ///
+    /// Nobody opens a pull request for a CVE published overnight, so without
+    /// this the Gate never sees it and nobody is looking. One digest per Scan,
+    /// never one message per Finding, and never the same Finding twice.
+    fn account_for_findings(
+        &mut self,
+        target: &str,
+        was_baseline: bool,
+    ) -> Result<Option<usize>, String> {
+        let open: Vec<&Finding> = self
+            .store
+            .state
+            .findings
+            .values()
+            .filter(|f| f.fingerprint.target == target)
+            .filter(|f| f.state == FindingState::Open)
+            .collect();
+        if open.is_empty() {
+            return Ok(None);
+        }
+        let keys: Vec<String> = open.iter().map(|f| f.fingerprint.display()).collect();
+        let seen = self.store.already_announced(&keys)?;
+        let mut fresh: Vec<&Finding> = open
+            .into_iter()
+            .filter(|f| !seen.contains(&f.fingerprint.display()))
+            .collect();
+        if fresh.is_empty() {
+            return Ok(None);
+        }
+        // Nothing to say, or nobody to say it to: the Findings are still
+        // accounted for, so they are not announced as news later.
+        if !self.notifier.enabled() || !was_baseline {
+            let all: Vec<String> = fresh.iter().map(|f| f.fingerprint.display()).collect();
+            self.store.remember_announced(&all)?;
+            return Ok(None);
+        }
+        fresh.sort_by(|a, b| {
+            let (a, b) = (a.risk_key(), b.risk_key());
+            a.0.cmp(&b.0)
+                .then(b.1.cmp(&a.1))
+                .then(b.2.cmp(&a.2))
+                .then(b.3.cmp(&a.3))
+                .then(a.4.cmp(&b.4))
+        });
+        let message = digest(target, &fresh);
+        let announced: Vec<String> = fresh.iter().map(|f| f.fingerprint.display()).collect();
+        // A notifier that is down must not fail the Scan, and must not mark
+        // anything announced — the next Scan says it instead.
+        match self.notifier.post(&message) {
+            Ok(()) => {
+                self.store.remember_announced(&announced)?;
+                Ok(Some(announced.len()))
+            }
+            Err(e) => {
+                eprintln!("hq: could not post the digest, will try again next Scan: {e}");
+                Ok(None)
+            }
+        }
     }
 
     /// Ask each leaked credential's provider whether it still works.

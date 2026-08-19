@@ -127,6 +127,19 @@ Intel is a port. `--intel-backend fake` (the default) makes no outbound call and
 
 The Gate rule is unchanged: new is what fails, at any severity. Severity ranks what to look at; scope decides what blocks. See [ADR 0023](docs/adr/0023-exploitability-intel.md).
 
+### The digest
+
+The Gate catches what a Developer is about to merge. It cannot catch the CVE published at 3am against code that has been on `main` for a year — nobody opens a pull request for that, so nobody is looking. Point HQ at a Slack incoming webhook and a Scan of a default Revision that opens Findings posts one digest:
+
+```sh
+export HQ_SLACK_WEBHOOK=https://hooks.slack.com/services/...
+hq intel-rescan --use trivy,gitleaks,opengrep && hq work --drain
+```
+
+One message per Scan, most urgent first, naming the Target, the problem, its urgency, and the Fingerprint to act on. A Finding is announced once — HQ keeps a ledger, so a re-scan does not repeat it, and Baseline day announces nothing. A Dismissed or Fixed Finding is never announced. Slack being unreachable is logged and leaves the Finding un-announced, so the next Scan says it instead; with no webhook configured HQ behaves exactly as it always did.
+
+This is the only notification surface. It is not a dashboard.
+
 ### Secret validity
 
 A key rotated last year and a key somebody can use right now look identical in a Scan report. With `--verify-secrets real`, HQ asks the credential's own provider — one read-only identity call, and nothing that could change the account.

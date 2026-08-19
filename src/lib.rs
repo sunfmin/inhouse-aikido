@@ -5,6 +5,7 @@ pub mod engine;
 pub mod engines;
 pub mod github;
 pub mod intel;
+pub mod notify;
 pub mod queue;
 pub mod remediation;
 pub mod scope;
