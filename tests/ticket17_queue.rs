@@ -27,6 +27,7 @@ fn config(ctx: &Ctx, workers: usize) -> WorkerConfig {
         database_url: TEST_URL.into(),
         schema: ctx.schema.clone(),
         github_backend: "fake".into(),
+        intel_backend: "fake".into(),
         workers,
         lease: Duration::from_secs(60),
         poll: Duration::from_millis(20),

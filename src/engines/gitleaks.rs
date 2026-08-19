@@ -1,4 +1,4 @@
-use crate::domain::{FindingKind, Observation, Revision, Target};
+use crate::domain::{FindingKind, Observation, Revision, Severity, Target};
 use crate::engine::{engine_timeout, run_with_timeout, Engine, EngineError};
 use serde::Deserialize;
 use std::path::Path;
@@ -38,6 +38,9 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
                 // gitleaks counts from zero.
                 line: h.start_line.map(|l| l + 1),
                 scope: Default::default(),
+                // gitleaks reports no severity. A live credential in a repo is
+                // not a "medium", so HQ does not pretend it is unranked.
+                severity: Severity::High,
             }
         })
         .collect())

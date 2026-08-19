@@ -73,7 +73,7 @@ hq [OPTIONS] <COMMAND>
   unenroll      Stop tracking a Target
   targets       List Targets
   scan          Run Engines against a Target
-  findings      List Findings (text or --json, filter by --target/--state/--kind/--scope)
+  findings      List Findings, most urgent first (--target/--state/--kind/--scope/--min-severity/--known-exploited)
   policy        Change what a Target's Gate blocks on
   show          One Finding as JSON
   brief         Agent Brief for one Finding, or the next agent-fixable Open Finding
@@ -110,6 +110,22 @@ hq policy acme/web --gate-dev-scope true   # a Target that ships its build outpu
 ```
 
 Scope HQ cannot determine stays `unknown`, and unknown Gates like runtime — HQ de-noises on evidence, never on a guess. A package that is a runtime dependency anywhere in the Target is runtime everywhere in it, so a monorepo's test app cannot de-noise the API's copy of the same library. npm lockfiles (v1, v2, v3) and `package.json` are read today; other ecosystems stay unknown until they have a reader. See [ADR 0022](docs/adr/0022-dependency-scope.md).
+
+### Severity and exploitability
+
+Findings come back most urgent first. Each carries the severity its Engine reported, and where the problem is a CVE, what the public sources say about it: FIRST's exploit-prediction score (EPSS) and whether CISA lists it as already being exploited.
+
+```sh
+hq findings --min-severity high      # what to look at first
+hq findings --known-exploited        # what is already being used against people
+hq --intel-backend real intel-rescan # re-rank every Target against today's intel
+```
+
+The order is: known-exploited, then severity, then EPSS, then Fingerprint — something already being exploited outranks any prediction, and the Fingerprint last means the order never wobbles between runs. `hq brief` hands an agent the most urgent agent-fixable Finding, keeping secrets ahead of SAST ahead of SCA within a severity band.
+
+Intel is a port. `--intel-backend fake` (the default) makes no outbound call and reads only what is cached; `real` reads EPSS and CISA's KEV, once per Scan for all its CVEs, cached in Postgres for a day (`HQ_INTEL_TTL_HOURS`). Point it at a mirror with `HQ_EPSS_API` and `HQ_KEV_FEED`. A source that is down leaves Findings ranked on Engine severity rather than failing the Scan.
+
+The Gate rule is unchanged: new is what fails, at any severity. Severity ranks what to look at; scope decides what blocks. See [ADR 0023](docs/adr/0023-exploitability-intel.md).
 
 ### The GitHub App
 

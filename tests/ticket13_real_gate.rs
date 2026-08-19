@@ -36,6 +36,7 @@ fn obs(problem: &str, location: &str, kind: FindingKind, line: Option<u32>) -> O
         message: format!("{problem} at {location}"),
         line,
         scope: Default::default(),
+        severity: Default::default(),
     }
 }
 

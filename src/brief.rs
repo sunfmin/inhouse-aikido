@@ -12,6 +12,12 @@ pub struct FindingView {
     /// runtime, development, or unknown — development-scope Findings do not
     /// block a merge, so an agent can leave them for later.
     pub scope: String,
+    /// critical, high, medium, low, or unknown.
+    pub severity: String,
+    /// Published probability this CVE is exploited in the next 30 days.
+    pub epss: Option<f64>,
+    /// On CISA's Known Exploited Vulnerabilities list.
+    pub known_exploited: bool,
     pub engines: Vec<String>,
     pub package: Option<String>,
     pub manifest: Option<String>,
@@ -33,6 +39,9 @@ impl FindingView {
             .to_string();
         Self {
             scope: f.scope().as_str().to_string(),
+            severity: f.severity.as_str().to_string(),
+            epss: f.epss,
+            known_exploited: f.known_exploited,
             fingerprint: f.fingerprint.display(),
             target: f.fingerprint.target.clone(),
             problem_id: f.fingerprint.problem_id.clone(),

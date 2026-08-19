@@ -76,6 +76,45 @@ pub enum FindingKind {
     License,
 }
 
+/// How bad the problem is, as the Engine reports it.
+///
+/// Ordered worst-last so `max` picks the worst of several Engines' opinions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    /// The Engine said nothing, and nothing is not "low".
+    #[default]
+    Unknown,
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl Severity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Severity::Unknown => "unknown",
+            Severity::Low => "low",
+            Severity::Medium => "medium",
+            Severity::High => "high",
+            Severity::Critical => "critical",
+        }
+    }
+
+    /// Engines spell severity every which way; this is the one place that knows.
+    pub fn parse(s: &str) -> Option<Severity> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "critical" => Some(Severity::Critical),
+            "high" | "error" => Some(Severity::High),
+            "medium" | "moderate" | "warning" => Some(Severity::Medium),
+            "low" | "info" | "note" | "negligible" => Some(Severity::Low),
+            "unknown" | "none" | "" => Some(Severity::Unknown),
+            _ => None,
+        }
+    }
+}
+
 /// Where a dependency is used. A CVE in a build-only package is real, but it is
 /// not on the path an attacker can reach, so it must not block a merge the way a
 /// runtime one does.
@@ -142,6 +181,9 @@ pub struct Observation {
     /// Finding, it just starts blocking merges.
     #[serde(default)]
     pub scope: Scope,
+    /// How bad the Engine that saw it says it is.
+    #[serde(default)]
+    pub severity: Severity,
 }
 
 impl Observation {
@@ -167,6 +209,21 @@ pub struct Finding {
     pub package: Option<String>,
     pub manifest: Option<String>,
     pub fixed_version: Option<String>,
+    /// The worst any Engine called it.
+    #[serde(default)]
+    pub severity: Severity,
+    /// Published likelihood that this CVE is exploited in the next 30 days,
+    /// 0.0–1.0. `None` for a problem that is not a CVE, or one nobody has
+    /// scored.
+    #[serde(default)]
+    pub epss: Option<f64>,
+    /// Where that score sits among all scored CVEs, 0.0–1.0.
+    #[serde(default)]
+    pub epss_percentile: Option<f64>,
+    /// On CISA's Known Exploited Vulnerabilities list: not a prediction, a
+    /// report that it has already been used.
+    #[serde(default)]
+    pub known_exploited: bool,
 }
 
 impl Finding {
@@ -188,6 +245,30 @@ impl Finding {
         } else {
             Scope::Unknown
         }
+    }
+
+    /// Most urgent first. Something already being exploited outranks any
+    /// prediction; after that it is severity, then the prediction, then the
+    /// Fingerprint so the order never wobbles between runs.
+    pub fn risk_key(&self) -> (bool, Severity, u64, String) {
+        (
+            self.known_exploited,
+            self.severity,
+            (self.epss.unwrap_or(0.0) * 1_000_000.0) as u64,
+            self.fingerprint.display(),
+        )
+    }
+
+    /// One line an Operator or an agent can rank on.
+    pub fn risk_summary(&self) -> String {
+        let mut out = format!("severity={}", self.severity.as_str());
+        if let Some(epss) = self.epss {
+            out.push_str(&format!(" epss={epss:.4}"));
+        }
+        if self.known_exploited {
+            out.push_str(" known_exploited");
+        }
+        out
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::domain::{dependency_location, FindingKind, Observation, Revision, Target};
+use crate::domain::{dependency_location, FindingKind, Observation, Revision, Severity, Target};
 use crate::engine::{engine_timeout, run_with_timeout, Engine, EngineError};
 use serde::Deserialize;
 use std::path::Path;
@@ -48,6 +48,8 @@ pub struct TrivyVuln {
     pub fixed: Option<String>,
     #[serde(default, rename = "Title")]
     pub title: Option<String>,
+    #[serde(default, rename = "Severity")]
+    pub severity: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,6 +58,8 @@ pub struct TrivyMisconfig {
     pub id: String,
     #[serde(default, rename = "Title")]
     pub title: Option<String>,
+    #[serde(default, rename = "Severity")]
+    pub severity: Option<String>,
     #[serde(default, rename = "CauseMetadata")]
     pub cause: Option<TrivyCause>,
 }
@@ -74,6 +78,11 @@ pub struct TrivySecret {
     pub title: Option<String>,
 }
 
+/// Trivy spells severity in capitals, and can say UNKNOWN.
+fn severity_of(raw: Option<&str>) -> Severity {
+    raw.and_then(Severity::parse).unwrap_or(Severity::Unknown)
+}
+
 pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError> {
     if raw.trim().is_empty() {
         return Ok(vec![]);
@@ -86,6 +95,7 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
         if let Some(vulns) = result.vulnerabilities {
             for v in vulns {
                 let fixed = v.fixed.filter(|s| !s.is_empty());
+                let severity = severity_of(v.severity.as_deref());
                 out.push(Observation {
                     engine: "trivy".into(),
                     problem_id: v.id,
@@ -98,12 +108,14 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
                     // A lockfile CVE is about the entry, not a line.
                     line: None,
                     scope: Default::default(),
+                    severity,
                 });
             }
         }
         if let Some(mis) = result.misconfigurations {
             for m in mis {
                 let line = m.cause.and_then(|c| c.start_line).filter(|l| *l > 0);
+                let severity = severity_of(m.severity.as_deref());
                 out.push(Observation {
                     engine: "trivy".into(),
                     problem_id: m.id,
@@ -115,6 +127,7 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
                     message: m.title.unwrap_or_default(),
                     scope: Default::default(),
                     line,
+                    severity,
                 });
             }
         }
@@ -138,6 +151,7 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
                     message: lic.category.unwrap_or_default(),
                     line: None,
                     scope: Default::default(),
+                    severity: Severity::Unknown,
                 });
             }
         }

@@ -29,6 +29,7 @@ fn secret_obs(problem: &str) -> Observation {
         message: "leaked key".into(),
         line: Some(7),
         scope: Default::default(),
+        severity: Default::default(),
     }
 }
 
@@ -40,6 +41,7 @@ fn drain(ctx: &Ctx) -> usize {
             database_url: TEST_URL.into(),
             schema: ctx.schema.clone(),
             github_backend: "fake".into(),
+            intel_backend: "fake".into(),
             workers: 1,
             lease: std::time::Duration::from_secs(60),
             poll: std::time::Duration::from_millis(20),
@@ -339,6 +341,7 @@ fn serve(ctx: &Ctx) -> (WebhookServer, String) {
         database_url: TEST_URL.into(),
         schema: ctx.schema.clone(),
         github_backend: "fake".into(),
+        intel_backend: "fake".into(),
         engines: vec!["fake".into()],
     };
     let server = WebhookServer::bind("127.0.0.1:0", config).expect("bind");
@@ -456,6 +459,7 @@ fn hq_refuses_to_serve_without_a_webhook_secret() {
         database_url: TEST_URL.into(),
         schema: ctx.schema.clone(),
         github_backend: "fake".into(),
+        intel_backend: "fake".into(),
         engines: vec!["fake".into()],
     };
     let err = match WebhookServer::bind("127.0.0.1:0", config) {

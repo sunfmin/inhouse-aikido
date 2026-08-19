@@ -1,10 +1,11 @@
 use crate::domain::PrRequest;
 use crate::domain::{
     Annotation, CheckRun, Finding, FindingKind, FindingState, Fingerprint, Observation,
-    Remediation, Revision, Scope, Target, TargetId, TargetKind,
+    Remediation, Revision, Scope, Severity, Target, TargetId, TargetKind,
 };
 use crate::engine::{Engine, FakeEngine};
 use crate::github::Github;
+use crate::intel::{CveIntel, IntelSource, NoIntel};
 use crate::remediation::{Remediator, SyntheticRemediator, UnconfiguredRemediator};
 use crate::store::Store;
 use crate::workspace::{Checkout, GitCheckout, Workspace};
@@ -16,6 +17,9 @@ pub struct ScanOutcome {
     pub revision: Revision,
     pub observations: Vec<Observation>,
     pub failed_engines: Vec<String>,
+    /// What the public sources say about the CVEs this Scan saw. Fetched in the
+    /// slow half, so the write path does no network I/O.
+    pub intel: std::collections::HashMap<String, CveIntel>,
 }
 
 pub struct Hq {
@@ -26,6 +30,53 @@ pub struct Hq {
     pub checkout: Box<dyn Checkout>,
     /// How a pin becomes a branch a Developer can merge.
     pub remediator: Box<dyn Remediator>,
+    /// Where exploitability intel comes from. `NoIntel` by default: HQ makes no
+    /// outbound call nobody asked for.
+    pub intel: Box<dyn IntelSource>,
+    /// How long cached intel is trusted before it is fetched again.
+    pub intel_ttl: std::time::Duration,
+}
+
+/// What a Developer reads first on the PR: how bad it is, whether anyone is
+/// already exploiting it, and whether it is blocking their merge.
+fn annotation_title(f: &Finding, gates: bool) -> String {
+    let mut title = format!(
+        "{:?} {} severity={}",
+        f.kind,
+        f.fingerprint.problem_id,
+        f.severity.as_str()
+    );
+    if f.known_exploited {
+        title.push_str(" known-exploited");
+    }
+    if !gates {
+        title.push_str(&format!(" ({} dependency)", f.scope().as_str()));
+    }
+    title
+}
+
+/// What an Operator or an agent asked to see. Grouped rather than passed as a
+/// row of options nobody can read at the call site.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FindingFilter<'a> {
+    pub target: Option<&'a str>,
+    pub state: Option<&'a str>,
+    pub kind: Option<&'a str>,
+    pub scope: Option<&'a str>,
+    /// Hide anything the Engines called less bad than this.
+    pub min_severity: Option<Severity>,
+    /// Only what CISA says is already being exploited.
+    pub known_exploited: bool,
+}
+
+/// How long HQ trusts a cached EPSS score or KEV entry. A day: the feeds are
+/// published daily, and a Scan must not spend its time refetching them.
+fn default_intel_ttl() -> std::time::Duration {
+    let hours = std::env::var("HQ_INTEL_TTL_HOURS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(24);
+    std::time::Duration::from_secs(hours * 3600)
 }
 
 impl Hq {
@@ -39,6 +90,8 @@ impl Hq {
             github,
             checkout: Box::new(GitCheckout::default()),
             remediator: Box::new(SyntheticRemediator),
+            intel: Box::new(NoIntel),
+            intel_ttl: default_intel_ttl(),
         })
     }
 
@@ -55,6 +108,8 @@ impl Hq {
             // A caller choosing their own backend must choose how pins are
             // prepared too; the synthetic one would push nothing.
             remediator: Box::new(UnconfiguredRemediator),
+            intel: Box::new(NoIntel),
+            intel_ttl: default_intel_ttl(),
         })
     }
 
@@ -67,6 +122,11 @@ impl Hq {
     /// Use a different way of preparing a pin.
     pub fn with_remediator(mut self, remediator: Box<dyn Remediator>) -> Self {
         self.remediator = remediator;
+        self
+    }
+
+    pub fn with_intel(mut self, intel: Box<dyn IntelSource>) -> Self {
+        self.intel = intel;
         self
     }
 
@@ -279,10 +339,12 @@ impl Hq {
         // Engines report a vulnerable package; the Target's manifests say
         // whether it is shipped. Read them while the workspace is still here.
         crate::scope::enrich(workspace, &mut observations);
+        let intel = self.lookup_intel(&observations);
         Ok(ScanOutcome {
             revision: rev,
             observations,
             failed_engines: failed,
+            intel,
         })
     }
 
@@ -310,6 +372,7 @@ impl Hq {
         let observations = &outcome.observations;
         let was_baseline = target.baseline_ready;
         self.apply_observations(name, &rev, observations, is_pr);
+        self.rank_findings(name, &outcome.intel);
         let mut msg = format!(
             "scanned {name}@{} observations={}",
             rev.0,
@@ -331,6 +394,70 @@ impl Hq {
             }
         }
         Ok(msg)
+    }
+
+    /// Ask the intel source about the CVEs in this Scan, using the cache first.
+    ///
+    /// Never fails the Scan: a source that is down, or turned off, leaves the
+    /// Findings ranked by Engine severity, which is where they started.
+    fn lookup_intel(
+        &mut self,
+        observations: &[Observation],
+    ) -> std::collections::HashMap<String, CveIntel> {
+        let wanted = crate::intel::cve_ids(observations.iter().map(|o| o.problem_id.clone()));
+        if wanted.is_empty() {
+            return std::collections::HashMap::new();
+        }
+        let mut known = self
+            .store
+            .cached_intel(&wanted, self.intel_ttl)
+            .unwrap_or_default();
+        let missing: Vec<String> = wanted
+            .into_iter()
+            .filter(|cve| !known.contains_key(cve))
+            .collect();
+        if missing.is_empty() || !self.intel.answers() {
+            return known;
+        }
+        match self.intel.fetch(&missing) {
+            Ok(fetched) => {
+                // Cache what the source did not know about too. A CVE nobody
+                // has scored is an answer, and refetching it every Scan is not
+                // a better one.
+                let answered: std::collections::HashMap<String, CveIntel> = missing
+                    .into_iter()
+                    .map(|cve| {
+                        let data = fetched.get(&cve).copied().unwrap_or_default();
+                        (cve, data)
+                    })
+                    .collect();
+                let _ = self.store.cache_intel(&answered);
+                known.extend(answered);
+            }
+            Err(e) => eprintln!("hq: intel unavailable, ranking on engine severity only: {e}"),
+        }
+        known
+    }
+
+    /// Give every Finding of this Target the severity its Engines reported and
+    /// the intel its CVE carries.
+    fn rank_findings(&mut self, target: &str, intel: &std::collections::HashMap<String, CveIntel>) {
+        for finding in self.store.state.findings.values_mut() {
+            if finding.fingerprint.target != target {
+                continue;
+            }
+            finding.severity = finding
+                .observations
+                .iter()
+                .map(|o| o.severity)
+                .max()
+                .unwrap_or_default();
+            if let Some(data) = intel.get(&finding.fingerprint.problem_id) {
+                finding.epss = data.epss;
+                finding.epss_percentile = data.percentile;
+                finding.known_exploited = data.known_exploited;
+            }
+        }
     }
 
     fn apply_observations(
@@ -359,6 +486,10 @@ impl Hq {
                     package: obs.package.clone(),
                     manifest: obs.manifest.clone(),
                     fixed_version: obs.fixed_version.clone(),
+                    severity: Severity::Unknown,
+                    epss: None,
+                    epss_percentile: None,
+                    known_exploited: false,
                 });
             finding.kind = obs.kind;
             finding.last_revision = Some(rev.clone());
@@ -533,13 +664,15 @@ impl Hq {
         Ok((opened, skipped))
     }
 
-    fn filtered_findings(
-        &self,
-        target: Option<&str>,
-        state: Option<&str>,
-        kind: Option<&str>,
-        scope: Option<&str>,
-    ) -> Vec<&Finding> {
+    fn filtered_findings(&self, filter: &FindingFilter) -> Vec<&Finding> {
+        let FindingFilter {
+            target,
+            state,
+            kind,
+            scope,
+            min_severity,
+            known_exploited: known_exploited_only,
+        } = *filter;
         let mut items: Vec<&Finding> = self
             .store
             .state
@@ -565,19 +698,23 @@ impl Hq {
                 })
             })
             .filter(|f| scope.is_none_or(|s| Scope::parse(s) == Some(f.scope())))
+            .filter(|f| min_severity.is_none_or(|m| f.severity >= m))
+            .filter(|f| !known_exploited_only || f.known_exploited)
             .collect();
-        items.sort_by_key(|f| f.fingerprint.display());
+        // Most urgent first: already exploited, then severity, then the
+        // prediction, then the Fingerprint so the order never wobbles.
+        items.sort_by(|a, b| {
+            let (a, b) = (a.risk_key(), b.risk_key());
+            b.0.cmp(&a.0)
+                .then(b.1.cmp(&a.1))
+                .then(b.2.cmp(&a.2))
+                .then(a.3.cmp(&b.3))
+        });
         items
     }
 
-    pub fn findings_text(
-        &self,
-        target: Option<&str>,
-        state: Option<&str>,
-        kind: Option<&str>,
-        scope: Option<&str>,
-    ) -> String {
-        let items = self.filtered_findings(target, state, kind, scope);
+    pub fn findings_text(&self, filter: &FindingFilter) -> String {
+        let items = self.filtered_findings(filter);
         if items.is_empty() {
             return "no findings".into();
         }
@@ -586,11 +723,12 @@ impl Hq {
             .map(|f| {
                 let engines: Vec<&str> = f.observations.iter().map(|o| o.engine.as_str()).collect();
                 format!(
-                    "{} state={:?} kind={:?} scope={} engines={}",
+                    "{} state={:?} kind={:?} scope={} {} engines={}",
                     f.fingerprint.display(),
                     f.state,
                     f.kind,
                     f.scope().as_str(),
+                    f.risk_summary(),
                     engines.join(",")
                 )
             })
@@ -598,15 +736,9 @@ impl Hq {
             .join("\n")
     }
 
-    pub fn findings_json(
-        &self,
-        target: Option<&str>,
-        state: Option<&str>,
-        kind: Option<&str>,
-        scope: Option<&str>,
-    ) -> Result<String, String> {
+    pub fn findings_json(&self, filter: &FindingFilter) -> Result<String, String> {
         let views: Vec<crate::brief::FindingView> = self
-            .filtered_findings(target, state, kind, scope)
+            .filtered_findings(filter)
             .into_iter()
             .map(crate::brief::FindingView::from_finding)
             .collect();
@@ -644,7 +776,17 @@ impl Hq {
             .values()
             .filter(|f| crate::brief::is_agent_fixable(f))
             .collect();
-        items.sort_by_key(|f| (crate::brief::pickup_rank(f), f.fingerprint.display()));
+        // Most urgent first, and only then the kind order — a CVE somebody is
+        // already exploiting outranks a secret nobody has touched, but within
+        // one severity a leaked credential is still the first thing to fix.
+        items.sort_by(|a, b| {
+            b.known_exploited
+                .cmp(&a.known_exploited)
+                .then(b.severity.cmp(&a.severity))
+                .then(crate::brief::pickup_rank(a).cmp(&crate::brief::pickup_rank(b)))
+                .then(b.epss.unwrap_or(0.0).total_cmp(&a.epss.unwrap_or(0.0)))
+                .then(a.fingerprint.display().cmp(&b.fingerprint.display()))
+        });
         items.into_iter().next()
     }
 
@@ -824,16 +966,7 @@ impl Hq {
                     "failure"
                 }
                 .into(),
-                title: if gates {
-                    format!("{:?} {}", f.kind, f.fingerprint.problem_id)
-                } else {
-                    format!(
-                        "{:?} {} ({} dependency)",
-                        f.kind,
-                        f.fingerprint.problem_id,
-                        f.scope().as_str()
-                    )
-                },
+                title: annotation_title(f, gates),
             });
             if !on_baseline && gates {
                 new_open.push(f.fingerprint.clone());

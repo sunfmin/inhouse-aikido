@@ -1,6 +1,6 @@
 use crate::domain::{
     Finding, FindingKind, FindingState, Fingerprint, Observation, Remediation, Revision, Scope,
-    Target, TargetId, TargetKind,
+    Severity, Target, TargetId, TargetKind,
 };
 use crate::engine::FakeEngine;
 use crate::github::{FakeGithub, Github};
@@ -115,6 +115,14 @@ CREATE TABLE IF NOT EXISTS scan_jobs (
   finished_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS scan_jobs_queued ON scan_jobs (state, queued_at);
+-- Public exploitability intel, cached so one Scan does not fetch per Finding.
+CREATE TABLE IF NOT EXISTS cve_intel (
+  cve TEXT PRIMARY KEY,
+  epss DOUBLE PRECISION,
+  percentile DOUBLE PRECISION,
+  known_exploited BOOLEAN NOT NULL DEFAULT FALSE,
+  fetched_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 -- Added after the first release; run after every CREATE above.
 ALTER TABLE observations ADD COLUMN IF NOT EXISTS line INTEGER;
 ALTER TABLE github_checks ADD COLUMN IF NOT EXISTS head_sha TEXT NOT NULL DEFAULT '';
@@ -122,6 +130,11 @@ ALTER TABLE github_prs ADD COLUMN IF NOT EXISTS head TEXT NOT NULL DEFAULT '';
 ALTER TABLE github_prs ADD COLUMN IF NOT EXISTS base TEXT NOT NULL DEFAULT '';
 ALTER TABLE observations ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'unknown';
 ALTER TABLE targets ADD COLUMN IF NOT EXISTS gate_dev_scope BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE observations ADD COLUMN IF NOT EXISTS severity TEXT NOT NULL DEFAULT 'unknown';
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS severity TEXT NOT NULL DEFAULT 'unknown';
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS epss DOUBLE PRECISION;
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS epss_percentile DOUBLE PRECISION;
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS known_exploited BOOLEAN NOT NULL DEFAULT FALSE;
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -253,6 +266,66 @@ impl Store {
             .collect())
     }
 
+    /// Intel HQ has already fetched and that is still fresh. Anything older
+    /// than the TTL is not returned, so it is refetched rather than trusted.
+    pub fn cached_intel(
+        &self,
+        cves: &[String],
+        ttl: std::time::Duration,
+    ) -> Result<HashMap<String, crate::intel::CveIntel>, String> {
+        if cves.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut client = self.client()?;
+        let seconds = ttl.as_secs_f64();
+        let rows = client
+            .query(
+                "SELECT cve, epss, percentile, known_exploited FROM cve_intel
+                 WHERE cve = ANY($1) AND fetched_at > now() - make_interval(secs => $2)",
+                &[&cves, &seconds],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                (
+                    r.get::<_, String>(0),
+                    crate::intel::CveIntel {
+                        epss: r.get(1),
+                        percentile: r.get(2),
+                        known_exploited: r.get(3),
+                    },
+                )
+            })
+            .collect())
+    }
+
+    /// Remember what a source said. Not part of HQ's state — it is a cache of
+    /// somebody else's facts, and `save` must never truncate it.
+    pub fn cache_intel(
+        &self,
+        intel: &HashMap<String, crate::intel::CveIntel>,
+    ) -> Result<(), String> {
+        if intel.is_empty() {
+            return Ok(());
+        }
+        let mut client = self.client()?;
+        for (cve, data) in intel {
+            client
+                .execute(
+                    "INSERT INTO cve_intel (cve, epss, percentile, known_exploited, fetched_at)
+                     VALUES ($1,$2,$3,$4, now())
+                     ON CONFLICT (cve) DO UPDATE SET epss = EXCLUDED.epss,
+                       percentile = EXCLUDED.percentile,
+                       known_exploited = EXCLUDED.known_exploited,
+                       fetched_at = EXCLUDED.fetched_at",
+                    &[cve, &data.epss, &data.percentile, &data.known_exploited],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
     /// The Scan queue in this schema.
     pub fn queue(&self) -> crate::queue::Queue {
         crate::queue::Queue::new(&self.url, &self.schema)
@@ -325,8 +398,9 @@ fn persist(tx: &mut postgres::Transaction<'_>, state: &State) -> Result<(), Stri
 
     for (key, f) in &state.findings {
         tx.execute(
-            "INSERT INTO findings (fp, target, problem_id, location_key, state, kind, last_revision, package, manifest, fixed_version)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+            "INSERT INTO findings (fp, target, problem_id, location_key, state, kind, last_revision, package, manifest, fixed_version,
+                                   severity, epss, epss_percentile, known_exploited)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
             &[
                 key,
                 &f.fingerprint.target,
@@ -338,13 +412,17 @@ fn persist(tx: &mut postgres::Transaction<'_>, state: &State) -> Result<(), Stri
                 &f.package,
                 &f.manifest,
                 &f.fixed_version,
+                &f.severity.as_str(),
+                &f.epss,
+                &f.epss_percentile,
+                &f.known_exploited,
             ],
         )
         .map_err(|e| e.to_string())?;
         for o in &f.observations {
             tx.execute(
-                "INSERT INTO observations (fp, engine, problem_id, location_key, kind, package, manifest, fixed_version, message, line, scope)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+                "INSERT INTO observations (fp, engine, problem_id, location_key, kind, package, manifest, fixed_version, message, line, scope, severity)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
                 &[
                     key,
                     &o.engine,
@@ -357,6 +435,7 @@ fn persist(tx: &mut postgres::Transaction<'_>, state: &State) -> Result<(), Stri
                     &o.message,
                     &o.line.map(|l| l as i32),
                     &o.scope.as_str(),
+                    &o.severity.as_str(),
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -441,7 +520,9 @@ fn load(client: &mut Client) -> Result<State, String> {
 
     for row in client
         .query(
-            "SELECT fp, target, problem_id, location_key, state, kind, last_revision, package, manifest, fixed_version FROM findings",
+            "SELECT fp, target, problem_id, location_key, state, kind, last_revision, package,
+                    manifest, fixed_version, severity, epss, epss_percentile, known_exploited
+             FROM findings",
             &[],
         )
         .map_err(|e| e.to_string())?
@@ -461,10 +542,14 @@ fn load(client: &mut Client) -> Result<State, String> {
             package: row.get(7),
             manifest: row.get(8),
             fixed_version: row.get(9),
+            severity: Severity::parse(row.get(10)).unwrap_or_default(),
+            epss: row.get(11),
+            epss_percentile: row.get(12),
+            known_exploited: row.get(13),
         };
         for o in client
             .query(
-                "SELECT engine, problem_id, location_key, kind, package, manifest, fixed_version, message, line, scope FROM observations WHERE fp = $1",
+                "SELECT engine, problem_id, location_key, kind, package, manifest, fixed_version, message, line, scope, severity FROM observations WHERE fp = $1",
                 &[&fp_key],
             )
             .map_err(|e| e.to_string())?
@@ -480,6 +565,7 @@ fn load(client: &mut Client) -> Result<State, String> {
                 message: o.get(7),
                 line: o.get::<_, Option<i32>>(8).map(|l| l as u32),
                 scope: Scope::parse(o.get(9)).unwrap_or_default(),
+                severity: Severity::parse(o.get(10)).unwrap_or_default(),
             });
         }
         state.findings.insert(fp_key, finding);

@@ -237,6 +237,7 @@ fn obs(package: &str, manifest: &str, scope: Scope) -> Observation {
         message: String::new(),
         line: None,
         scope,
+        severity: Default::default(),
     }
 }
 

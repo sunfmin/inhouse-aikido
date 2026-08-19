@@ -4,6 +4,7 @@ pub mod domain;
 pub mod engine;
 pub mod engines;
 pub mod github;
+pub mod intel;
 pub mod queue;
 pub mod remediation;
 pub mod scope;

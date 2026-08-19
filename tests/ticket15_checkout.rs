@@ -156,8 +156,11 @@ fn a_clone_that_fails_is_a_failed_scan_not_a_clean_target() {
     assert!(err.contains("acme/nope"), "got {err}");
     assert!(seen.lock().unwrap().is_empty(), "no Engine ran");
     assert!(
-        hq.findings_text(Some("acme/nope"), None, None, None)
-            .contains("no findings"),
+        hq.findings_text(&hq::service::FindingFilter {
+            target: Some("acme/nope"),
+            ..Default::default()
+        })
+        .contains("no findings"),
         "and nothing was recorded"
     );
 }

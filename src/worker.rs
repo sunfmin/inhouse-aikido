@@ -16,6 +16,7 @@ pub struct WorkerConfig {
     pub database_url: String,
     pub schema: String,
     pub github_backend: String,
+    pub intel_backend: String,
     /// How many Scans may run at once.
     pub workers: usize,
     /// How long a claimed job may go without a heartbeat before another worker
@@ -124,7 +125,12 @@ fn with_heartbeat<T>(queue: &Queue, id: i64, lease: Duration, work: impl FnOnce(
 }
 
 fn run_job(config: &WorkerConfig, job: &Job) -> Result<Done, String> {
-    let mut hq = open_hq_for(&config.database_url, &config.schema, &config.github_backend)?;
+    let mut hq = open_hq_for(
+        &config.database_url,
+        &config.schema,
+        &config.github_backend,
+        &config.intel_backend,
+    )?;
     if !hq.tracks(&job.target) {
         return Ok(Done::Discarded(format!("{} is not Enrolled", job.target)));
     }
@@ -143,7 +149,12 @@ fn run_job(config: &WorkerConfig, job: &Job) -> Result<Done, String> {
 
     // The fast half. One writer at a time, across processes.
     let _lock = WriteLock::acquire(&config.database_url, &config.schema)?;
-    let mut hq = open_hq_for(&config.database_url, &config.schema, &config.github_backend)?;
+    let mut hq = open_hq_for(
+        &config.database_url,
+        &config.schema,
+        &config.github_backend,
+        &config.intel_backend,
+    )?;
     if !hq.tracks(&job.target) {
         return Ok(Done::Discarded(format!(
             "{} stopped being Enrolled mid-Scan",

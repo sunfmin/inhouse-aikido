@@ -268,6 +268,7 @@ pub struct ServeConfig {
     pub database_url: String,
     pub schema: String,
     pub github_backend: String,
+    pub intel_backend: String,
     pub engines: Vec<String>,
 }
 
@@ -343,6 +344,7 @@ impl WebhookServer {
             &self.config.database_url,
             &self.config.schema,
             &self.config.github_backend,
+            &self.config.intel_backend,
         )?;
         if !delivery.is_empty() && hq.store.delivery_seen(delivery)? {
             return Ok("duplicate delivery, already handled".into());

@@ -1,4 +1,4 @@
-use crate::domain::{FindingKind, Observation, Revision, Target};
+use crate::domain::{FindingKind, Observation, Revision, Severity, Target};
 use crate::engine::{engine_timeout, run_with_timeout, Engine, EngineError};
 use serde::Deserialize;
 use std::path::Path;
@@ -30,6 +30,9 @@ pub struct OpengrepPosition {
 pub struct OpengrepExtra {
     #[serde(default)]
     pub message: Option<String>,
+    /// opengrep says ERROR / WARNING / INFO.
+    #[serde(default)]
+    pub severity: Option<String>,
 }
 
 pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError> {
@@ -41,17 +44,25 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
     Ok(report
         .results
         .into_iter()
-        .map(|r| Observation {
-            engine: "opengrep".into(),
-            problem_id: r.check_id,
-            location_key: r.path, // rewritten relative to workspace in scan()
-            kind: FindingKind::Sast,
-            package: None,
-            manifest: None,
-            fixed_version: None,
-            line: r.start.and_then(|p| p.line),
-            scope: Default::default(),
-            message: r.extra.and_then(|e| e.message).unwrap_or_default(),
+        .map(|r| {
+            let extra = r.extra;
+            Observation {
+                engine: "opengrep".into(),
+                problem_id: r.check_id,
+                location_key: r.path, // rewritten relative to workspace in scan()
+                kind: FindingKind::Sast,
+                package: None,
+                manifest: None,
+                fixed_version: None,
+                line: r.start.and_then(|p| p.line),
+                scope: Default::default(),
+                severity: extra
+                    .as_ref()
+                    .and_then(|e| e.severity.as_deref())
+                    .and_then(Severity::parse)
+                    .unwrap_or(Severity::Unknown),
+                message: extra.and_then(|e| e.message).unwrap_or_default(),
+            }
         })
         .collect())
 }
