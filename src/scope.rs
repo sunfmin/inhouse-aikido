@@ -6,7 +6,6 @@
 //! runner stops blocking merges without anybody hand-maintaining a list.
 
 use crate::domain::{FindingKind, Observation, Scope};
-use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -90,59 +89,21 @@ fn read_manifest(root: &Path, manifest: &str) -> HashMap<String, Scope> {
 /// npm resolves this for us: a package reachable only through `devDependencies`
 /// is marked `"dev": true` in the lockfile, at whatever depth it sits.
 pub fn npm_lock_scopes(text: &str) -> HashMap<String, Scope> {
-    let Ok(lock): Result<Value, _> = serde_json::from_str(text) else {
-        return HashMap::new();
-    };
-    let mut out: HashMap<String, Scope> = HashMap::new();
-    // Lockfile v2/v3: a flat map keyed by install path.
-    if let Some(packages) = lock.get("packages").and_then(Value::as_object) {
-        for (path, entry) in packages {
-            let Some(name) = package_name(path) else {
-                continue;
-            };
-            record(&mut out, name, dev_flag(entry));
-        }
-    }
-    // Lockfile v1: a tree keyed by package name.
-    if let Some(deps) = lock.get("dependencies").and_then(Value::as_object) {
-        walk_v1(deps, &mut out);
+    let mut out = HashMap::new();
+    for entry in crate::inventory::npm_lock_entries(text) {
+        record(&mut out, entry.name, entry.dev);
     }
     out
-}
-
-fn walk_v1(deps: &serde_json::Map<String, Value>, out: &mut HashMap<String, Scope>) {
-    for (name, entry) in deps {
-        record(out, name.clone(), dev_flag(entry));
-        if let Some(nested) = entry.get("dependencies").and_then(Value::as_object) {
-            walk_v1(nested, out);
-        }
-    }
 }
 
 /// `package.json` alone: only the declared dependencies, which is all a Target
 /// without a lockfile can tell us.
 pub fn npm_package_scopes(text: &str) -> HashMap<String, Scope> {
-    let Ok(pkg): Result<Value, _> = serde_json::from_str(text) else {
-        return HashMap::new();
-    };
     let mut out = HashMap::new();
-    for (field, scope) in [
-        ("dependencies", Scope::Runtime),
-        ("optionalDependencies", Scope::Runtime),
-        ("peerDependencies", Scope::Runtime),
-        ("devDependencies", Scope::Development),
-    ] {
-        if let Some(map) = pkg.get(field).and_then(Value::as_object) {
-            for name in map.keys() {
-                record(&mut out, name.clone(), scope == Scope::Development);
-            }
-        }
+    for entry in crate::inventory::npm_package_entries(text) {
+        record(&mut out, entry.name, entry.dev);
     }
     out
-}
-
-fn dev_flag(entry: &Value) -> bool {
-    entry.get("dev").and_then(Value::as_bool).unwrap_or(false)
 }
 
 /// Runtime wins: the same package can appear twice in one lockfile, once
@@ -158,16 +119,5 @@ fn record(out: &mut HashMap<String, Scope>, name: String, dev: bool) {
         _ => {
             out.insert(name, scope);
         }
-    }
-}
-
-/// `node_modules/@scope/pkg/node_modules/dep` is a copy of `dep`. The root
-/// entry, keyed by the empty string, is the Target itself and not a dependency.
-fn package_name(path: &str) -> Option<String> {
-    let (_, name) = path.rsplit_once("node_modules/")?;
-    if name.is_empty() {
-        None
-    } else {
-        Some(name.to_string())
     }
 }

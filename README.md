@@ -127,6 +127,19 @@ Intel is a port. `--intel-backend fake` (the default) makes no outbound call and
 
 The Gate rule is unchanged: new is what fails, at any severity. Severity ranks what to look at; scope decides what blocks. See [ADR 0023](docs/adr/0023-exploitability-intel.md).
 
+### Malicious dependencies
+
+A CVE is a mistake in a package you meant to install. A malicious package is not that — the package *is* the attack, so the fix is removal and a version bump is worse than nothing. HQ reads the Target's whole dependency inventory out of its lockfiles and checks it two ways:
+
+```sh
+hq --intel-backend real scan acme/web --use trivy   # OSV malicious-package advisories
+hq findings --kind malicious
+```
+
+A malicious dependency is its own Finding kind, **fails the Gate even when its Fingerprint is on the Baseline** — nobody accepts malware as debt — and never gets a pin Remediation, not even for its ordinary CVEs. Advisory answers are cached, including "asked, and it is clean"; a source that is down reports no malware rather than failing the Scan.
+
+Typosquat detection is local and always on: a package name exactly one keystroke — substitution, insertion, deletion, or transposition — from a well-known one gets flagged. That is a guess, so it is Dismissable like anything else and stays Dismissed. See [ADR 0025](docs/adr/0025-malicious-dependencies.md).
+
 ### The digest
 
 The Gate catches what a Developer is about to merge. It cannot catch the CVE published at 3am against code that has been on `main` for a year — nobody opens a pull request for that, so nobody is looking. Point HQ at a Slack incoming webhook and a Scan of a default Revision that opens Findings posts one digest:

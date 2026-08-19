@@ -6,6 +6,7 @@ use crate::domain::{
 use crate::engine::{Engine, FakeEngine};
 use crate::github::Github;
 use crate::intel::{CveIntel, IntelSource, NoIntel};
+use crate::malicious::{AdvisorySource, NoAdvisories};
 use crate::notify::{Notifier, Silent};
 use crate::remediation::{Remediator, SyntheticRemediator, UnconfiguredRemediator};
 use crate::store::Store;
@@ -45,6 +46,8 @@ pub struct Hq {
     pub verifier: Box<dyn SecretVerifier>,
     /// Where a digest goes when a Scan of a default Revision opens Findings.
     pub notifier: Box<dyn Notifier>,
+    /// Who to ask whether a dependency is malware.
+    pub advisories: Box<dyn AdvisorySource>,
 }
 
 /// One message, most urgent first, with the Fingerprint to act on.
@@ -130,6 +133,7 @@ impl Hq {
             // Configured by the caller; a Scan run from a library never posts
             // anywhere by accident.
             notifier: Box::new(Silent),
+            advisories: Box::new(NoAdvisories),
         })
     }
 
@@ -152,6 +156,7 @@ impl Hq {
             // Configured by the caller; a Scan run from a library never posts
             // anywhere by accident.
             notifier: Box::new(Silent),
+            advisories: Box::new(NoAdvisories),
         })
     }
 
@@ -179,6 +184,11 @@ impl Hq {
 
     pub fn with_notifier(mut self, notifier: Box<dyn Notifier>) -> Self {
         self.notifier = notifier;
+        self
+    }
+
+    pub fn with_advisories(mut self, advisories: Box<dyn AdvisorySource>) -> Self {
+        self.advisories = advisories;
         self
     }
 
@@ -391,6 +401,10 @@ impl Hq {
         // Engines report a vulnerable package; the Target's manifests say
         // whether it is shipped. Read them while the workspace is still here.
         crate::scope::enrich(workspace, &mut observations);
+        // The Engines said what is broken. The inventory says what is hostile.
+        if let Some(root) = workspace {
+            observations.extend(self.malicious_observations(root));
+        }
         let intel = self.lookup_intel(&observations);
         let validity = self.verify_secrets(name, &observations);
         // The credentials leave with the Observations they came in on. Nothing
@@ -567,6 +581,117 @@ impl Hq {
         }
     }
 
+    /// Dependencies that are the attack rather than a package with a bug.
+    ///
+    /// Advisory lookups are cached and only reach the network for packages HQ
+    /// has not asked about lately; a source that is down produces no malicious
+    /// Findings rather than failing the Scan. Typosquat detection is local and
+    /// runs either way.
+    fn malicious_observations(&self, workspace: &std::path::Path) -> Vec<Observation> {
+        let packages = crate::inventory::read(workspace);
+        if packages.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for (package, advisory) in self.advisories_for(&packages) {
+            out.push(Observation {
+                engine: "advisories".into(),
+                problem_id: advisory.id.clone(),
+                location_key: crate::domain::dependency_location(&package.manifest, &package.name),
+                kind: FindingKind::Malicious,
+                package: Some(package.name.clone()),
+                manifest: Some(package.manifest.clone()),
+                // There is no version of a malicious package that is safe.
+                fixed_version: None,
+                message: format!(
+                    "{} is a malicious package: {}",
+                    package.name, advisory.summary
+                ),
+                line: None,
+                scope: package.scope,
+                severity: Severity::Critical,
+                secret: None,
+            });
+        }
+        for squat in crate::malicious::typosquats(&packages) {
+            let Some(package) = packages.iter().find(|p| p.name == squat.package) else {
+                continue;
+            };
+            out.push(Observation {
+                engine: "typosquat".into(),
+                problem_id: format!("typosquat:{}", squat.looks_like),
+                location_key: crate::domain::dependency_location(&package.manifest, &package.name),
+                kind: FindingKind::Malicious,
+                package: Some(package.name.clone()),
+                manifest: Some(package.manifest.clone()),
+                fixed_version: None,
+                message: format!(
+                    "{} is one keystroke from {}, which is what a Developer probably meant",
+                    squat.package, squat.looks_like
+                ),
+                line: None,
+                scope: package.scope,
+                severity: Severity::High,
+                secret: None,
+            });
+        }
+        out
+    }
+
+    /// One batched question for everything not already cached.
+    fn advisories_for(
+        &self,
+        packages: &[crate::inventory::Package],
+    ) -> Vec<(crate::inventory::Package, crate::malicious::Advisory)> {
+        let mut hits = Vec::new();
+        if !self.advisories.enabled() {
+            return hits;
+        }
+        let ecosystem = "npm";
+        let mut names: Vec<String> = packages
+            .iter()
+            .filter(|p| p.ecosystem == ecosystem)
+            .map(|p| p.name.clone())
+            .collect();
+        names.sort();
+        names.dedup();
+        let cached = self
+            .store
+            .cached_advisories(ecosystem, &names, self.intel_ttl)
+            .unwrap_or_default();
+        let unknown: Vec<crate::inventory::Package> = packages
+            .iter()
+            .filter(|p| !cached.contains_key(&p.name))
+            .cloned()
+            .collect();
+        let mut answers: std::collections::HashMap<String, Option<crate::malicious::Advisory>> =
+            cached;
+        if !unknown.is_empty() {
+            match self.advisories.malicious(&unknown) {
+                Ok(found) => {
+                    let mut fresh: std::collections::HashMap<
+                        String,
+                        Option<crate::malicious::Advisory>,
+                    > = std::collections::HashMap::new();
+                    for package in &unknown {
+                        fresh.insert(package.name.clone(), found.get(&package.name).cloned());
+                    }
+                    let _ = self.store.cache_advisories(ecosystem, &fresh);
+                    answers.extend(fresh);
+                }
+                Err(e) => {
+                    eprintln!("hq: malicious-package advisories unavailable, none reported: {e}")
+                }
+            }
+        }
+        for package in packages {
+            if let Some(Some(advisory)) = answers.get(&package.name) {
+                hits.push((package.clone(), advisory.clone()));
+            }
+        }
+        hits
+    }
+
     /// Ask each leaked credential's provider whether it still works.
     ///
     /// Only the verdict comes back. A provider HQ cannot reach leaves the
@@ -720,6 +845,17 @@ impl Hq {
         let mut groups: std::collections::HashMap<(String, String, String), Vec<Fingerprint>> =
             std::collections::HashMap::new();
         let baseline = t.baseline.clone();
+        // A package reported as malware gets no pin, not even for its CVEs:
+        // every version of it is the attack, so a bump is not a fix.
+        let hostile: std::collections::HashSet<String> = self
+            .store
+            .state
+            .findings
+            .values()
+            .filter(|f| f.fingerprint.target == target)
+            .filter(|f| f.kind == FindingKind::Malicious && f.state == FindingState::Open)
+            .filter_map(|f| f.package.clone())
+            .collect();
         for f in self.store.state.findings.values() {
             if f.fingerprint.target != target {
                 continue;
@@ -728,6 +864,9 @@ impl Hq {
                 continue;
             }
             if f.kind != FindingKind::Sca {
+                continue;
+            }
+            if f.package.as_ref().is_some_and(|p| hostile.contains(p)) {
                 continue;
             }
             if baseline.iter().any(|b| b == &f.fingerprint) {
@@ -856,6 +995,7 @@ impl Hq {
                     "sast" => f.kind == FindingKind::Sast,
                     "iac" => f.kind == FindingKind::Iac,
                     "license" => f.kind == FindingKind::License,
+                    "malicious" => f.kind == FindingKind::Malicious,
                     _ => true,
                 })
             })

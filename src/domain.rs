@@ -74,6 +74,9 @@ pub enum FindingKind {
     Sast,
     Iac,
     License,
+    /// The dependency is the attack, not a package with a bug in it. The fix is
+    /// removal, never a version bump.
+    Malicious,
 }
 
 /// A leaked credential the Engine handed HQ so it can be checked against its
@@ -336,10 +339,12 @@ impl Finding {
     /// Does this Finding block a merge on its own?
     ///
     /// A live leaked credential does, Baseline or not — a key somebody can use
-    /// right now is an incident, not debt HQ agreed to live with. A credential
-    /// the provider has already stopped accepting does not.
+    /// right now is an incident, not debt HQ agreed to live with. So does a
+    /// malicious dependency: nobody accepts malware as debt. A credential the
+    /// provider has already stopped accepting does not.
     pub fn gates_regardless_of_baseline(&self) -> bool {
-        self.kind == FindingKind::Secret && self.validity == Validity::Active
+        self.kind == FindingKind::Malicious
+            || (self.kind == FindingKind::Secret && self.validity == Validity::Active)
     }
 
     pub fn is_dead_secret(&self) -> bool {

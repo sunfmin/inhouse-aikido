@@ -120,6 +120,16 @@ CREATE TABLE IF NOT EXISTS announced_findings (
   fp TEXT PRIMARY KEY,
   announced_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- What the advisory source said about a package, cached. A NULL advisory_id
+-- means "asked, and it is clean" — worth remembering too.
+CREATE TABLE IF NOT EXISTS package_advisories (
+  ecosystem TEXT NOT NULL,
+  name TEXT NOT NULL,
+  advisory_id TEXT,
+  summary TEXT,
+  fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (ecosystem, name)
+);
 -- Public exploitability intel, cached so one Scan does not fetch per Finding.
 CREATE TABLE IF NOT EXISTS cve_intel (
   cve TEXT PRIMARY KEY,
@@ -326,6 +336,68 @@ impl Store {
                        known_exploited = EXCLUDED.known_exploited,
                        fetched_at = EXCLUDED.fetched_at",
                     &[cve, &data.epss, &data.percentile, &data.known_exploited],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// What HQ already asked about these packages, if the answer is still
+    /// fresh. `None` in the map means "asked, and clean".
+    pub fn cached_advisories(
+        &self,
+        ecosystem: &str,
+        names: &[String],
+        ttl: std::time::Duration,
+    ) -> Result<HashMap<String, Option<crate::malicious::Advisory>>, String> {
+        if names.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut client = self.client()?;
+        let seconds = ttl.as_secs_f64();
+        let rows = client
+            .query(
+                "SELECT name, advisory_id, summary FROM package_advisories
+                 WHERE ecosystem = $1 AND name = ANY($2)
+                   AND fetched_at > now() - make_interval(secs => $3)",
+                &[&ecosystem, &names, &seconds],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                let id: Option<String> = r.get(1);
+                let summary: Option<String> = r.get(2);
+                (
+                    r.get::<_, String>(0),
+                    id.map(|id| crate::malicious::Advisory {
+                        id,
+                        summary: summary.unwrap_or_default(),
+                    }),
+                )
+            })
+            .collect())
+    }
+
+    pub fn cache_advisories(
+        &self,
+        ecosystem: &str,
+        answers: &HashMap<String, Option<crate::malicious::Advisory>>,
+    ) -> Result<(), String> {
+        if answers.is_empty() {
+            return Ok(());
+        }
+        let mut client = self.client()?;
+        for (name, advisory) in answers {
+            let id = advisory.as_ref().map(|a| a.id.clone());
+            let summary = advisory.as_ref().map(|a| a.summary.clone());
+            client
+                .execute(
+                    "INSERT INTO package_advisories (ecosystem, name, advisory_id, summary, fetched_at)
+                     VALUES ($1,$2,$3,$4, now())
+                     ON CONFLICT (ecosystem, name) DO UPDATE SET advisory_id = EXCLUDED.advisory_id,
+                       summary = EXCLUDED.summary, fetched_at = EXCLUDED.fetched_at",
+                    &[&ecosystem, name, &id, &summary],
                 )
                 .map_err(|e| e.to_string())?;
         }
@@ -705,6 +777,7 @@ fn fkind_str(k: FindingKind) -> &'static str {
         FindingKind::Sast => "sast",
         FindingKind::Iac => "iac",
         FindingKind::License => "license",
+        FindingKind::Malicious => "malicious",
     }
 }
 
@@ -715,6 +788,7 @@ fn parse_fkind(s: String) -> Result<FindingKind, String> {
         "sast" => Ok(FindingKind::Sast),
         "iac" => Ok(FindingKind::Iac),
         "license" => Ok(FindingKind::License),
+        "malicious" => Ok(FindingKind::Malicious),
         other => Err(format!("bad finding kind {other}")),
     }
 }

@@ -60,6 +60,7 @@ impl FindingView {
                 FindingKind::Sast => "sast".into(),
                 FindingKind::Iac => "iac".into(),
                 FindingKind::License => "license".into(),
+                FindingKind::Malicious => "malicious".into(),
             },
             engines,
             package: f.package.clone(),
@@ -80,16 +81,20 @@ pub fn is_agent_fixable(f: &Finding) -> bool {
         FindingKind::Sast | FindingKind::Secret | FindingKind::Iac => true,
         FindingKind::Sca => f.fixed_version.is_some(),
         FindingKind::License => false,
+        // Removing a dependency changes what the Target does. That is a
+        // decision, not a pin.
+        FindingKind::Malicious => false,
     }
 }
 
 /// Lower is earlier in the pickup queue.
 pub fn pickup_rank(f: &Finding) -> u8 {
     match f.kind {
-        FindingKind::Secret => 0,
-        FindingKind::Sast => 1,
-        FindingKind::Sca => 2,
-        FindingKind::Iac => 3,
+        FindingKind::Malicious => 0,
+        FindingKind::Secret => 1,
+        FindingKind::Sast => 2,
+        FindingKind::Sca => 3,
+        FindingKind::Iac => 4,
         FindingKind::License => 9,
     }
 }
@@ -162,6 +167,28 @@ pub fn brief_markdown(f: &Finding) -> String {
             format!("- Package: `{}`\n- License: `{}`", v.package.as_deref().unwrap_or("?"), v.problem_id),
             "- [ ] Operator recorded a decision (replace or accept)\n- [ ] If replaced, HQ Scan no longer reports this Fingerprint as Open".into(),
             "- Auto-accepting a license\n- Dismissing without an Operator".to_string(),
+        ),
+        FindingKind::Malicious => (
+            format!(
+                "Remove {} — it is reported as a malicious package",
+                v.package.as_deref().unwrap_or("the package")
+            ),
+            format!(
+                "`{}` in `{}` is flagged by `{}`. {}",
+                v.package.as_deref().unwrap_or("?"),
+                v.manifest.as_deref().unwrap_or(v.location_key.as_str()),
+                v.problem_id,
+                v.message
+            ),
+            "The dependency is gone from the manifest and the lockfile, and whatever it was there for is done another way. A HQ Scan no longer reports this Fingerprint as Open.".into(),
+            format!(
+                "- Package: `{}`\n- Manifest: `{}`\n- Advisory: `{}`\n- There is no version of this package that is safe to pin",
+                v.package.as_deref().unwrap_or("?"),
+                v.manifest.as_deref().unwrap_or("?"),
+                v.problem_id
+            ),
+            format!("- [ ] `{}` no longer appears in the manifest or the lockfile\n- [ ] Whatever depended on it still works\n- [ ] `hq scan` does not report Fingerprint `{}` as Open", v.package.as_deref().unwrap_or("?"), v.fingerprint),
+            "- Pinning it to another version — every version of a malicious package is malicious\n- Dismissing it instead of removing it\n- Running its install scripts to \"check\"".to_string(),
         ),
     };
 

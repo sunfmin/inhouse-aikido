@@ -17,8 +17,9 @@ pub struct Cli {
     /// `fake` backend used by tests and local development.
     #[arg(long, env = "HQ_GITHUB_BACKEND", default_value = "fake")]
     pub github_backend: String,
-    /// Where exploitability intel comes from: `real` (FIRST's EPSS and CISA's
-    /// KEV) or `fake`, which only reads what is already cached and makes no
+    /// Where public intel about dependencies comes from — exploitability
+    /// (FIRST's EPSS, CISA's KEV) and malicious-package advisories (OSV):
+    /// `real`, or `fake`, which only reads what is already cached and makes no
     /// outbound call.
     #[arg(long, env = "HQ_INTEL_BACKEND", default_value = "fake")]
     pub intel_backend: String,
@@ -293,7 +294,22 @@ pub fn open_hq_for(
     intel_backend: &str,
 ) -> Result<Hq, String> {
     let hq = open_on_github(database_url, schema, backend)?;
-    Ok(hq.with_intel(intel_source(intel_backend)?))
+    Ok(hq
+        .with_intel(intel_source(intel_backend)?)
+        .with_advisories(advisory_source(intel_backend)?))
+}
+
+/// Malicious-package advisories ride the same switch as exploitability intel:
+/// both are public data about somebody else's packages, and an Operator who
+/// declines one declines the other.
+fn advisory_source(backend: &str) -> Result<Box<dyn crate::malicious::AdvisorySource>, String> {
+    match backend {
+        "fake" | "none" => Ok(Box::new(crate::malicious::NoAdvisories)),
+        "real" | "public" => Ok(Box::new(crate::malicious::OsvAdvisories::new())),
+        other => Err(format!(
+            "unknown --intel-backend {other}: expected `fake` or `real`"
+        )),
+    }
 }
 
 /// `off` is the default and makes no call: HQ does not hand a Target's
@@ -488,6 +504,7 @@ fn parse_kind(s: &str) -> Result<FindingKind, String> {
         "sast" => Ok(FindingKind::Sast),
         "iac" => Ok(FindingKind::Iac),
         "license" => Ok(FindingKind::License),
+        "malicious" => Ok(FindingKind::Malicious),
         other => Err(format!("unknown kind {other}")),
     }
 }
