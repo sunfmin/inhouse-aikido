@@ -109,6 +109,28 @@ hq github installations   # installations and the repos each one covers
 
 HQ mints a short-lived RS256 JWT from the private key, exchanges it for an installation access token, and reuses that token until it nears the expiry GitHub reports. See [ADR 0020](docs/adr/0020-synchronous-http-stack.md) for why the HTTP stack is synchronous.
 
+### Webhooks
+
+`hq serve` is the App's inbound side. Point the App's webhook URL at it:
+
+```sh
+export HQ_WEBHOOK_SECRET=...      # the App's webhook secret; HQ refuses to serve without it
+hq --github-backend real serve --addr 0.0.0.0:8787 --use trivy,gitleaks,opengrep
+```
+
+Every delivery's HMAC signature is verified before anything happens; an unverified delivery is rejected with 401 and leaves no trace. A verified one is acknowledged with 202 *before* the Scan runs, because a Scan outlives GitHub's delivery timeout. Then:
+
+| Event | What HQ does |
+|---|---|
+| `pull_request` opened / synchronize / reopened | Gate the head Revision and write the Check Run |
+| `issue_comment` starting `/hq ` | Run the command — `/hq dismiss <fingerprint>` from someone who can write the Target |
+| `installation`, `installation_repositories` | Record which repos the App can reach |
+| anything else | Acknowledged and ignored |
+
+A delivery id HQ has already handled is not handled again. An event about a repo that is not Enrolled, or a Target whose Baseline is not written yet, is a no-op — Enrollment is opt-in and Baseline day fails nothing.
+
+Deliveries are handled one at a time. Concurrency needs the Scan queue, which is not built yet.
+
 ## Agent interface
 
 HQ is built to be operated by humans *and* agents. Findings are machine-readable end to end:

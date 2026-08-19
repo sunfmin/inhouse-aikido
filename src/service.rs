@@ -70,6 +70,21 @@ impl Hq {
         Ok(format!("unenrolled {name}"))
     }
 
+    /// Is this repo a Target at all? Enrollment is opt-in, so most repos are not.
+    pub fn tracks(&self, name: &str) -> bool {
+        self.store.state.targets.contains_key(name)
+    }
+
+    /// Has the Target's first default-Revision Scan written the Baseline? The
+    /// Gate starts only after that.
+    pub fn baseline_ready(&self, name: &str) -> bool {
+        self.store
+            .state
+            .targets
+            .get(name)
+            .is_some_and(|t| t.baseline_ready)
+    }
+
     pub fn list_targets(&self) -> String {
         if self.store.state.targets.is_empty() {
             return "no targets".into();

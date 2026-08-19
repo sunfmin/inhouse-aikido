@@ -87,6 +87,16 @@ CREATE TABLE IF NOT EXISTS fake_obs (
 CREATE TABLE IF NOT EXISTS fake_fail (
   scan_key TEXT PRIMARY KEY
 );
+-- Deliveries HQ has already acted on, so a redelivery is not a second Gate run.
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+  delivery_id TEXT PRIMARY KEY,
+  seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Which installation covers which repo, as the App's installation events report.
+CREATE TABLE IF NOT EXISTS app_installations (
+  repo TEXT PRIMARY KEY,
+  installation_id BIGINT NOT NULL
+);
 -- Added after the first release; run after every CREATE above.
 ALTER TABLE observations ADD COLUMN IF NOT EXISTS line INTEGER;
 ALTER TABLE github_checks ADD COLUMN IF NOT EXISTS head_sha TEXT NOT NULL DEFAULT '';
@@ -157,11 +167,76 @@ impl Store {
     /// The fake backend's rows from an earlier invocation. Only the fake backend
     /// has any; a real one reads GitHub instead.
     pub fn load_fake_github(&self) -> Result<FakeGithub, String> {
+        let mut client = self.client()?;
+        FakeGithub::load(&mut client)
+    }
+
+    /// Has HQ already acted on this delivery?
+    pub fn delivery_seen(&self, delivery_id: &str) -> Result<bool, String> {
+        let mut client = self.client()?;
+        let rows = client
+            .query(
+                "SELECT 1 FROM webhook_deliveries WHERE delivery_id = $1",
+                &[&delivery_id],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(!rows.is_empty())
+    }
+
+    /// Record a delivery as handled. Called after the work succeeded, so a
+    /// delivery that failed can be retried by GitHub.
+    pub fn remember_delivery(&self, delivery_id: &str) -> Result<(), String> {
+        let mut client = self.client()?;
+        client
+            .execute(
+                "INSERT INTO webhook_deliveries (delivery_id) VALUES ($1)
+                 ON CONFLICT (delivery_id) DO NOTHING",
+                &[&delivery_id],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn record_installation(&self, repo: &str, installation_id: u64) -> Result<(), String> {
+        let mut client = self.client()?;
+        client
+            .execute(
+                "INSERT INTO app_installations (repo, installation_id) VALUES ($1,$2)
+                 ON CONFLICT (repo) DO UPDATE SET installation_id = EXCLUDED.installation_id",
+                &[&repo, &(installation_id as i64)],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn forget_installation(&self, repo: &str) -> Result<(), String> {
+        let mut client = self.client()?;
+        client
+            .execute("DELETE FROM app_installations WHERE repo = $1", &[&repo])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Repos the App can reach, as its installation events reported them.
+    pub fn reachable_repos(&self) -> Result<Vec<(String, u64)>, String> {
+        let mut client = self.client()?;
+        Ok(client
+            .query(
+                "SELECT repo, installation_id FROM app_installations ORDER BY repo",
+                &[],
+            )
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|r| (r.get(0), r.get::<_, i64>(1) as u64))
+            .collect())
+    }
+
+    fn client(&self) -> Result<Client, String> {
         let mut client = connect(&self.url)?;
         client
             .batch_execute(&format!("SET search_path TO {}", self.schema))
             .map_err(|e| e.to_string())?;
-        FakeGithub::load(&mut client)
+        Ok(client)
     }
 
     pub fn fake_engine(&self, name: &str) -> FakeEngine {

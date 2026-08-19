@@ -129,6 +129,15 @@ pub enum Cmd {
         workspace: Option<PathBuf>,
     },
     GithubDump,
+    /// Receive GitHub App webhooks and act on them.
+    Serve {
+        /// Address to listen on.
+        #[arg(long, env = "HQ_LISTEN", default_value = "127.0.0.1:8787")]
+        addr: String,
+        /// Comma-separated Engine names to run when a PR arrives.
+        #[arg(long, default_value = "fake")]
+        r#use: String,
+    },
     /// App identity and installation diagnostics. Needs no database.
     Github {
         #[command(subcommand)]
@@ -155,6 +164,10 @@ where
     if let Cmd::Github { sub } = &cli.cmd {
         return github_cmd(sub);
     }
+    // The server opens HQ once per delivery, not once for the process.
+    if let Cmd::Serve { addr, r#use } = &cli.cmd {
+        return serve_cmd(&cli, addr, r#use);
+    }
     let mut hq = open_hq(&cli)?;
     let out = dispatch(&mut hq, cli.cmd)?;
     hq.save()?;
@@ -162,17 +175,37 @@ where
 }
 
 fn open_hq(cli: &Cli) -> Result<Hq, String> {
-    match cli.github_backend.as_str() {
-        "fake" => Hq::open(&cli.database_url, &cli.schema),
+    open_hq_for(&cli.database_url, &cli.schema, &cli.github_backend)
+}
+
+/// Open HQ on the named backend. Shared with `hq serve`, which opens one per
+/// delivery.
+pub fn open_hq_for(database_url: &str, schema: &str, backend: &str) -> Result<Hq, String> {
+    match backend {
+        "fake" => Hq::open(database_url, schema),
         "real" | "github" => Hq::open_with_github(
-            &cli.database_url,
-            &cli.schema,
+            database_url,
+            schema,
             Box::new(crate::github::real::RealGithub::from_env()?),
         ),
         other => Err(format!(
             "unknown --github-backend {other}: expected `fake` or `real`"
         )),
     }
+}
+
+fn serve_cmd(cli: &Cli, addr: &str, uses: &str) -> Result<String, String> {
+    let config = crate::webhook::ServeConfig {
+        secret: std::env::var("HQ_WEBHOOK_SECRET").unwrap_or_default(),
+        database_url: cli.database_url.clone(),
+        schema: cli.schema.clone(),
+        github_backend: cli.github_backend.clone(),
+        engines: uses.split(',').map(|s| s.trim().to_string()).collect(),
+    };
+    let server = crate::webhook::WebhookServer::bind(addr, config)?;
+    println!("hq serve: listening on {}", server.local_addr());
+    server.run(None);
+    Ok("hq serve: stopped".into())
 }
 
 fn github_cmd(sub: &GithubCmd) -> Result<String, String> {
@@ -356,7 +389,8 @@ fn dispatch(hq: &mut Hq, cmd: Cmd) -> Result<String, String> {
             hq.intel_rescan_named(&names, workspace.as_deref())
         }
         Cmd::GithubDump => Ok(hq.github_dump()),
-        // Handled before the Store is opened.
+        // Both are handled before the Store is opened.
         Cmd::Github { sub } => github_cmd(&sub),
+        Cmd::Serve { .. } => Err("hq serve is handled before HQ is opened".into()),
     }
 }
