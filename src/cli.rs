@@ -194,9 +194,13 @@ pub fn open_hq_for(database_url: &str, schema: &str, backend: &str) -> Result<Hq
                 schema,
                 Box::new(crate::github::real::RealGithub::new(auth.clone())),
             )?;
-            Ok(hq.with_checkout(Box::new(crate::workspace::GitCheckout::new(Box::new(
-                auth,
-            )))))
+            Ok(hq
+                .with_checkout(Box::new(crate::workspace::GitCheckout::new(Box::new(
+                    auth.clone(),
+                ))))
+                .with_remediator(Box::new(crate::remediation::GitRemediator::new(Box::new(
+                    crate::workspace::GitCheckout::new(Box::new(auth)),
+                )))))
         }
         other => Err(format!(
             "unknown --github-backend {other}: expected `fake` or `real`"

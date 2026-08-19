@@ -4,6 +4,7 @@ pub mod domain;
 pub mod engine;
 pub mod engines;
 pub mod github;
+pub mod remediation;
 pub mod service;
 pub mod store;
 pub mod webhook;

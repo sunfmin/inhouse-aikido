@@ -182,6 +182,23 @@ pub struct OpenedPr {
     pub number: u64,
     pub title: String,
     pub body: String,
+    #[serde(default)]
+    pub head: String,
+    #[serde(default)]
+    pub base: String,
+    pub files: Vec<PrFile>,
+}
+
+/// What HQ asks GitHub to open. The branch is already pushed by the time this
+/// reaches the backend; `files` is what it changed, for humans and for the fake
+/// backend's record.
+#[derive(Debug, Clone)]
+pub struct PrRequest {
+    pub repo: String,
+    pub title: String,
+    pub body: String,
+    pub head: String,
+    pub base: String,
     pub files: Vec<PrFile>,
 }
 

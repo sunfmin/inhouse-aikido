@@ -49,6 +49,7 @@ impl GithubStub {
         std::thread::spawn(move || {
             let mut token_calls = 0usize;
             let mut next_check_id = 100u64;
+            let mut next_pr = 500u64;
             let mut checks: HashMap<String, u64> = HashMap::new();
 
             for stream in listener.incoming() {
@@ -151,6 +152,13 @@ impl GithubStub {
                         let id: u64 = route.rsplit('/').next().and_then(|s| s.parse().ok()).unwrap_or(0);
                         (200, format!(r#"{{"id":{id},"name":"hq"}}"#))
                     }
+                } else if route.ends_with("/pulls") && method == "POST" {
+                    let n = next_pr;
+                    next_pr += 1;
+                    (201, format!(r#"{{"number":{n},"state":"open"}}"#))
+                } else if route.starts_with("/repos/") && route.contains("/pulls") && method == "GET"
+                {
+                    (200, "[]".to_string())
                 } else {
                     (404, r#"{"message":"Not Found"}"#.to_string())
                 };

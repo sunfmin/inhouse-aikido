@@ -100,6 +100,8 @@ CREATE TABLE IF NOT EXISTS app_installations (
 -- Added after the first release; run after every CREATE above.
 ALTER TABLE observations ADD COLUMN IF NOT EXISTS line INTEGER;
 ALTER TABLE github_checks ADD COLUMN IF NOT EXISTS head_sha TEXT NOT NULL DEFAULT '';
+ALTER TABLE github_prs ADD COLUMN IF NOT EXISTS head TEXT NOT NULL DEFAULT '';
+ALTER TABLE github_prs ADD COLUMN IF NOT EXISTS base TEXT NOT NULL DEFAULT '';
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

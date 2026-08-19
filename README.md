@@ -93,7 +93,7 @@ Every command takes `--github-backend`: `fake` (the default — an in-process Gi
 hq --github-backend real handle-pr acme/web --number 42 --head <sha> --base main --use trivy,gitleaks,opengrep
 ```
 
-Against the real backend the Gate is a Check Run named `hq` on the PR's head Revision: one per Revision, updated rather than restacked on the next Scan. Every Open Finding on that Revision is annotated in the file it is in — `failure` for what is new, `warning` for Baseline debt — and each annotation carries the Fingerprint and the `/hq dismiss` command for it. Engines that fail write a failed Check Run, and a Check Run HQ cannot write is an error, never a silent pass. Remediation PRs against real GitHub are not wired yet.
+Against the real backend the Gate is a Check Run named `hq` on the PR's head Revision: one per Revision, updated rather than restacked on the next Scan. Every Open Finding on that Revision is annotated in the file it is in — `failure` for what is new, `warning` for Baseline debt — and each annotation carries the Fingerprint and the `/hq dismiss` command for it. Engines that fail write a failed Check Run, and a Check Run HQ cannot write is an error, never a silent pass.
 
 ### The GitHub App
 
@@ -131,6 +131,18 @@ Every delivery's HMAC signature is verified before anything happens; an unverifi
 A delivery id HQ has already handled is not handled again. An event about a repo that is not Enrolled, or a Target whose Baseline is not written yet, is a no-op — Enrollment is opt-in and Baseline day fails nothing.
 
 Deliveries are handled one at a time. Concurrency needs the Scan queue, which is not built yet.
+
+### Remediations
+
+For an SCA Finding with a known fixed version, HQ prepares the pin and opens it as a pull request on the default Revision — one package, one PR, whatever it fixes, so a bad `minimist` bump never blocks a good `lodash` one. The PR body lists every Finding the bump would Fixed, and the PR's own Gate is green for those Fingerprints, so it is mergeable.
+
+HQ does not hand-write lockfiles. It checks the default Revision out, lets the ecosystem's own tool resolve the pin, and pushes the result as `hq/pin-<package>-<version>`:
+
+| Ecosystem | How the pin is made |
+|---|---|
+| npm | A declared dependency is bumped where it is declared; a transitive one becomes an `overrides` entry, because a package the Target never declared is not ours to declare. `npm install --package-lock-only --ignore-scripts` resolves the lockfile. |
+
+Anything else is reported as `unpinnable=<manifest>` and gets no PR. A placeholder edit that looks like a fix is worse than no fix. Secrets, SAST, and IaC still get no Remediation — HQ does not write source it cannot write safely.
 
 ### Workspaces
 

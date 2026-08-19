@@ -240,30 +240,3 @@ fn a_gate_that_cannot_be_written_is_an_error_not_a_silent_pass() {
         .expect_err("a Check Run HQ could not write must not look like a pass");
     assert!(err.contains("500"), "got {err:?}");
 }
-
-#[test]
-fn a_default_revision_scan_opens_no_remediation_it_cannot_open() {
-    let ctx = Ctx::new();
-    let stub = GithubStub::start();
-    let mut hq = hq_on(&stub, &ctx);
-    enrolled(&mut hq, vec![]);
-
-    // Baseline exists; a fixable SCA Finding arrives on the default Revision.
-    let mut fixable = obs(
-        "CVE-2024-1111",
-        "web/package-lock.json::minimist",
-        FindingKind::Sca,
-        None,
-    );
-    fixable.package = Some("minimist".into());
-    fixable.manifest = Some("web/package-lock.json".into());
-    fixable.fixed_version = Some("1.2.8".into());
-    hq.add_fake_obs("acme/web", "main", fixable);
-
-    let msg = hq.scan("acme/web", None).expect("scan must not fail");
-    assert!(
-        !msg.contains("remediations="),
-        "the real backend cannot open a PR yet, so it opens none: {msg}"
-    );
-    assert!(stub.calls_to("POST", "/pulls").is_empty());
-}

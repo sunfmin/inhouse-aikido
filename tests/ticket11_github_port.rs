@@ -2,7 +2,7 @@
 mod common;
 
 use common::{Ctx, TEST_URL};
-use hq::domain::{CheckRun, PrFile};
+use hq::domain::{CheckRun, PrRequest};
 use hq::github::Github;
 use hq::Hq;
 use std::sync::{Arc, Mutex};
@@ -22,13 +22,7 @@ impl Github for Recorder {
         self.checks.lock().unwrap().push(check);
         Ok(())
     }
-    fn open_pr(
-        &mut self,
-        _repo: &str,
-        _title: &str,
-        _body: &str,
-        _files: Vec<PrFile>,
-    ) -> Result<u64, String> {
+    fn open_pr(&mut self, _request: PrRequest) -> Result<u64, String> {
         Ok(1)
     }
     fn dump(&self) -> serde_json::Value {

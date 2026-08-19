@@ -68,3 +68,4 @@ pub fn binary_on_path(name: &str) -> bool {
 }
 
 pub mod ghstub;
+pub mod gitorigin;

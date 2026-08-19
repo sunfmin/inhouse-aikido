@@ -1,7 +1,7 @@
 pub mod app;
 pub mod real;
 
-use crate::domain::{CheckRun, OpenedPr, PrFile};
+use crate::domain::{CheckRun, OpenedPr, PrRequest};
 use serde::{Deserialize, Serialize};
 
 /// HQ's outbound GitHub port. The backend is chosen at runtime by whoever
@@ -13,13 +13,8 @@ pub trait Github: Send + Sync {
     /// Write the Gate. A backend that cannot reach GitHub says so — the Gate
     /// must never look green because the write failed.
     fn upsert_check(&mut self, check: CheckRun) -> Result<(), String>;
-    fn open_pr(
-        &mut self,
-        repo: &str,
-        title: &str,
-        body: &str,
-        files: Vec<PrFile>,
-    ) -> Result<u64, String>;
+    /// Open a pull request. Its head branch already exists on the Target.
+    fn open_pr(&mut self, request: PrRequest) -> Result<u64, String>;
     /// Whether this backend can open a Remediation. False means HQ skips
     /// Remediation rather than pretending to open one.
     fn can_open_pr(&self) -> bool {
@@ -61,21 +56,17 @@ impl Github for FakeGithub {
         Ok(())
     }
 
-    fn open_pr(
-        &mut self,
-        repo: &str,
-        title: &str,
-        body: &str,
-        files: Vec<PrFile>,
-    ) -> Result<u64, String> {
+    fn open_pr(&mut self, request: PrRequest) -> Result<u64, String> {
         self.next_pr += 1;
         let number = self.next_pr;
         self.prs.push(OpenedPr {
-            repo: repo.to_string(),
+            repo: request.repo,
             number,
-            title: title.to_string(),
-            body: body.to_string(),
-            files,
+            title: request.title,
+            body: request.body,
+            head: request.head,
+            base: request.base,
+            files: request.files,
         });
         Ok(number)
     }
@@ -101,8 +92,8 @@ impl Github for FakeGithub {
         for p in &self.prs {
             let files = serde_json::to_value(&p.files).map_err(|e| e.to_string())?;
             tx.execute(
-                "INSERT INTO github_prs (repo, number, title, body, files) VALUES ($1,$2,$3,$4,$5)",
-                &[&p.repo, &(p.number as i64), &p.title, &p.body, &files],
+                "INSERT INTO github_prs (repo, number, title, body, head, base, files) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+                &[&p.repo, &(p.number as i64), &p.title, &p.body, &p.head, &p.base, &files],
             )
             .map_err(|e| e.to_string())?;
         }
@@ -138,17 +129,19 @@ impl FakeGithub {
         }
         for row in client
             .query(
-                "SELECT repo, number, title, body, files FROM github_prs",
+                "SELECT repo, number, title, body, head, base, files FROM github_prs",
                 &[],
             )
             .map_err(|e| e.to_string())?
         {
-            let files: serde_json::Value = row.get(4);
+            let files: serde_json::Value = row.get(6);
             me.prs.push(OpenedPr {
                 repo: row.get(0),
                 number: row.get::<_, i64>(1) as u64,
                 title: row.get(2),
                 body: row.get(3),
+                head: row.get(4),
+                base: row.get(5),
                 files: serde_json::from_value(files).unwrap_or_default(),
             });
         }

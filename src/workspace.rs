@@ -31,6 +31,16 @@ pub trait Checkout: Send + Sync {
     /// Put `revision` of `repo` on disk. `revision` may be a branch name or an
     /// exact commit.
     fn checkout(&mut self, repo: &str, revision: &str) -> Result<Workspace, String>;
+
+    /// Commit whatever is in `workspace` onto `branch` and push it, so the
+    /// branch exists on the Target and a pull request can point at it.
+    fn publish_branch(
+        &mut self,
+        repo: &str,
+        workspace: &Path,
+        branch: &str,
+        message: &str,
+    ) -> Result<(), String>;
 }
 
 /// Hands out installation tokens for cloning. `None` means clone anonymously,
@@ -150,4 +160,46 @@ impl Checkout for GitCheckout {
 
         Ok(Workspace { dir })
     }
+
+    fn publish_branch(
+        &mut self,
+        repo: &str,
+        workspace: &Path,
+        branch: &str,
+        message: &str,
+    ) -> Result<(), String> {
+        let token = self.tokens.token_for(repo)?;
+        git(workspace, None, &["checkout", "--quiet", "-B", branch])?;
+        git(workspace, None, &["add", "--all"])?;
+        let (name, email) = author();
+        git(
+            workspace,
+            None,
+            &[
+                "-c",
+                &format!("user.name={name}"),
+                "-c",
+                &format!("user.email={email}"),
+                "commit",
+                "--quiet",
+                "-m",
+                message,
+            ],
+        )?;
+        // Force, because the branch is HQ's: re-preparing the same pin rewrites
+        // it rather than accumulating commits nobody asked for.
+        git(
+            workspace,
+            token.as_deref(),
+            &["push", "--quiet", "--force", "origin", &format!("HEAD:refs/heads/{branch}")],
+        )
+    }
+}
+
+/// Who HQ commits as. The App, not a person.
+fn author() -> (String, String) {
+    let name = std::env::var("HQ_GIT_AUTHOR_NAME").unwrap_or_else(|_| "inhouse-aikido[bot]".into());
+    let email = std::env::var("HQ_GIT_AUTHOR_EMAIL")
+        .unwrap_or_else(|_| "inhouse-aikido[bot]@users.noreply.github.com".into());
+    (name, email)
 }

@@ -1,9 +1,11 @@
 use crate::domain::{
-    Annotation, CheckRun, Finding, FindingKind, FindingState, Fingerprint, Observation, PrFile,
+    Annotation, CheckRun, Finding, FindingKind, FindingState, Fingerprint, Observation,
     Remediation, Revision, Target, TargetId, TargetKind,
 };
 use crate::engine::{Engine, EngineError, FakeEngine};
+use crate::domain::PrRequest;
 use crate::github::Github;
+use crate::remediation::{Remediator, SyntheticRemediator, UnconfiguredRemediator};
 use crate::store::Store;
 use crate::workspace::{Checkout, GitCheckout, Workspace};
 
@@ -13,6 +15,8 @@ pub struct Hq {
     pub github: Box<dyn Github>,
     /// How a Revision gets onto disk when nobody hands HQ a workspace.
     pub checkout: Box<dyn Checkout>,
+    /// How a pin becomes a branch a Developer can merge.
+    pub remediator: Box<dyn Remediator>,
 }
 
 impl Hq {
@@ -25,6 +29,7 @@ impl Hq {
             store,
             github,
             checkout: Box::new(GitCheckout::default()),
+            remediator: Box::new(SyntheticRemediator),
         })
     }
 
@@ -38,12 +43,21 @@ impl Hq {
             store: Store::open(url, schema)?,
             github,
             checkout: Box::new(GitCheckout::default()),
+            // A caller choosing their own backend must choose how pins are
+            // prepared too; the synthetic one would push nothing.
+            remediator: Box::new(UnconfiguredRemediator),
         })
     }
 
     /// Use a different way of getting a Revision onto disk.
     pub fn with_checkout(mut self, checkout: Box<dyn Checkout>) -> Self {
         self.checkout = checkout;
+        self
+    }
+
+    /// Use a different way of preparing a pin.
+    pub fn with_remediator(mut self, remediator: Box<dyn Remediator>) -> Self {
+        self.remediator = remediator;
         self
     }
 
@@ -226,9 +240,14 @@ impl Hq {
             msg.push_str(" baseline_written");
         }
         if !is_pr && was_baseline && rev.0 == target.default_revision.0 {
-            let opened = self.maybe_remediate(name)?;
+            let (opened, unpinnable) = self.maybe_remediate(name)?;
             if opened > 0 {
                 msg.push_str(&format!(" remediations={opened}"));
+            }
+            if !unpinnable.is_empty() {
+                // Say so out loud. A Finding HQ silently declined to fix reads
+                // as a Finding nobody has to think about.
+                msg.push_str(&format!(" unpinnable={}", unpinnable.join(",")));
             }
         }
         Ok(msg)
@@ -310,18 +329,20 @@ impl Hq {
         }
     }
 
-    fn maybe_remediate(&mut self, target: &str) -> Result<usize, String> {
+    /// Returns how many Remediations were opened, and the manifests HQ has no
+    /// way to pin.
+    fn maybe_remediate(&mut self, target: &str) -> Result<(usize, Vec<String>), String> {
         // A backend that cannot open a PR opens none, rather than recording a
         // Remediation nobody can merge.
         if !self.github.can_open_pr() {
-            return Ok(0);
+            return Ok((0, vec![]));
         }
         let t = self.store.state.targets.get(target).unwrap();
         if !t.baseline_ready {
-            return Ok(0);
+            return Ok((0, vec![]));
         }
         if t.kind != TargetKind::Github {
-            return Ok(0);
+            return Ok((0, vec![]));
         }
         // Group safe pin Findings by (manifest, package, fixed_version)
         let mut groups: std::collections::HashMap<(String, String, String), Vec<Fingerprint>> =
@@ -369,6 +390,12 @@ impl Hq {
             })
             .collect();
 
+        // Deterministic order, so a Target with several pins opens its PRs the
+        // same way every run.
+        let mut groups: Vec<_> = groups.into_iter().collect();
+        groups.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let mut skipped: Vec<String> = Vec::new();
         for ((manifest, package, fixed), fps) in groups {
             if existing
                 .iter()
@@ -376,6 +403,22 @@ impl Hq {
             {
                 continue;
             }
+            let prepared = match self.remediator.prepare(
+                target,
+                &default_rev,
+                &manifest,
+                &package,
+                &fixed,
+            ) {
+                Ok(Some(prepared)) => prepared,
+                // An ecosystem HQ cannot pin gets no Remediation. A placeholder
+                // edit that looks like a fix is worse than none.
+                Ok(None) => {
+                    skipped.push(manifest.clone());
+                    continue;
+                }
+                Err(e) => return Err(format!("cannot prepare a pin for {package}: {e}")),
+            };
             let title = format!("Remediation: pin {package} to {fixed} in {manifest}");
             let body = format!(
                 "Safe pin-bump for {}.\n\nFindings:\n{}",
@@ -385,11 +428,14 @@ impl Hq {
                     .collect::<Vec<_>>()
                     .join("\n")
             );
-            let files = vec![PrFile {
-                path: manifest.clone(),
-                content: format!("# pin {package} = {fixed}\n"),
-            }];
-            let pr = self.github.open_pr(target, &title, &body, files)?;
+            let pr = self.github.open_pr(PrRequest {
+                repo: target.to_string(),
+                title,
+                body,
+                head: prepared.branch,
+                base: default_rev.clone(),
+                files: prepared.files,
+            })?;
             self.store.state.remediations.push(Remediation {
                 target: target.to_string(),
                 manifest,
@@ -404,7 +450,9 @@ impl Hq {
         for (pr, fps) in gated {
             self.post_gate(target, pr, &default_rev, false, &fps)?;
         }
-        Ok(opened)
+        skipped.sort();
+        skipped.dedup();
+        Ok((opened, skipped))
     }
 
     fn filtered_findings(

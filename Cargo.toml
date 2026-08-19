@@ -17,7 +17,7 @@ hmac = "0.12"
 jsonwebtoken = { version = "11.0.0", default-features = false, features = ["use_pem", "rust_crypto"] }
 postgres = { version = "0.19.14", features = ["with-serde_json-1"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["preserve_order"] }
 sha2 = "0.10"
 tempfile = "3.10"
 thiserror = "2.0"

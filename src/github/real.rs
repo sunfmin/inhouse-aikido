@@ -4,7 +4,7 @@
 //! per Revision: a second Scan of the same Revision updates it rather than
 //! stacking another. Annotations go up in the batches the API accepts.
 
-use crate::domain::{Annotation, CheckRun, PrFile};
+use crate::domain::{Annotation, CheckRun, PrRequest};
 use crate::github::app::{AppAuth, Method};
 use crate::github::Github;
 use std::sync::{Arc, Mutex};
@@ -55,6 +55,12 @@ impl RealGithub {
             .and_then(|run| run.get("id"))
             .and_then(|id| id.as_u64()))
     }
+}
+
+/// GitHub wants `owner:branch` when filtering pull requests by head.
+fn head_filter(repo: &str, branch: &str) -> String {
+    let owner = repo.split('/').next().unwrap_or(repo);
+    format!("{owner}:{branch}")
 }
 
 fn annotation_json(a: &Annotation) -> serde_json::Value {
@@ -134,20 +140,37 @@ impl Github for RealGithub {
         Ok(())
     }
 
-    fn open_pr(
-        &mut self,
-        repo: &str,
-        _title: &str,
-        _body: &str,
-        _files: Vec<PrFile>,
-    ) -> Result<u64, String> {
-        Err(format!(
-            "HQ cannot yet open a Remediation on {repo} against real GitHub"
-        ))
-    }
-
-    fn can_open_pr(&self) -> bool {
-        false
+    fn open_pr(&mut self, request: PrRequest) -> Result<u64, String> {
+        let path = format!("/repos/{}/pulls", request.repo);
+        let payload = serde_json::json!({
+            "title": request.title,
+            "body": request.body,
+            "head": request.head,
+            "base": request.base,
+        });
+        let opened = self.call(&request.repo, Method::Post, &path, Some(payload))?;
+        if let Some(number) = opened.get("number").and_then(|n| n.as_u64()) {
+            return Ok(number);
+        }
+        // GitHub refuses a second PR for a branch that already has one open.
+        // That PR is the Remediation; find it rather than opening another.
+        let path = format!(
+            "/repos/{}/pulls?state=open&head={}",
+            request.repo,
+            head_filter(&request.repo, &request.head)
+        );
+        let existing = self.call(&request.repo, Method::Get, &path, None)?;
+        existing
+            .as_array()
+            .and_then(|prs| prs.first())
+            .and_then(|pr| pr.get("number"))
+            .and_then(|n| n.as_u64())
+            .ok_or_else(|| {
+                format!(
+                    "GitHub neither opened nor reported a pull request for {}",
+                    request.head
+                )
+            })
     }
 
     fn dump(&self) -> serde_json::Value {
