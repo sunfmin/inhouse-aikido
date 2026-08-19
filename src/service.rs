@@ -5,11 +5,14 @@ use crate::domain::{
 use crate::engine::{Engine, EngineError, FakeEngine};
 use crate::github::Github;
 use crate::store::Store;
+use crate::workspace::{Checkout, GitCheckout, Workspace};
 
 pub struct Hq {
     pub store: Store,
     /// Chosen when HQ is constructed, never loaded from the Store's state.
     pub github: Box<dyn Github>,
+    /// How a Revision gets onto disk when nobody hands HQ a workspace.
+    pub checkout: Box<dyn Checkout>,
 }
 
 impl Hq {
@@ -18,7 +21,11 @@ impl Hq {
     pub fn open(url: &str, schema: &str) -> Result<Self, String> {
         let store = Store::open(url, schema)?;
         let github = Box::new(store.load_fake_github()?);
-        Ok(Self { store, github })
+        Ok(Self {
+            store,
+            github,
+            checkout: Box::new(GitCheckout::default()),
+        })
     }
 
     /// Open HQ on a caller-chosen GitHub backend.
@@ -30,7 +37,14 @@ impl Hq {
         Ok(Self {
             store: Store::open(url, schema)?,
             github,
+            checkout: Box::new(GitCheckout::default()),
         })
+    }
+
+    /// Use a different way of getting a Revision onto disk.
+    pub fn with_checkout(mut self, checkout: Box<dyn Checkout>) -> Self {
+        self.checkout = checkout;
+        self
     }
 
     pub fn save(&self) -> Result<(), String> {
@@ -177,6 +191,18 @@ impl Hq {
                 .unwrap_or(target.default_revision.0.as_str())
                 .to_string(),
         );
+        // Nobody handed HQ a checkout, and an Engine wants to read files: clone
+        // the Revision ourselves. The workspace goes away when `cloned` drops,
+        // including if an Engine fails.
+        let mut cloned: Option<Workspace> = None;
+        if workspace.is_none()
+            && target.kind == TargetKind::Github
+            && engines.iter().any(|e| e.needs_workspace())
+        {
+            cloned = Some(self.checkout.checkout(name, &rev.0)?);
+        }
+        let workspace = workspace.or_else(|| cloned.as_ref().map(|w| w.path()));
+
         let mut observations = Vec::new();
         let mut failed = Vec::new();
         for engine in engines {

@@ -15,7 +15,11 @@ use hq::Hq;
 const KEY: &str = include_str!("fixtures/app/test-app-key.pem");
 
 fn hq_on(stub: &GithubStub, ctx: &Ctx) -> Hq {
-    let auth = AppAuth::new(AppConfig::new("42", KEY, stub.base.clone()));
+    let auth = std::sync::Arc::new(std::sync::Mutex::new(AppAuth::new(AppConfig::new(
+        "42",
+        KEY,
+        stub.base.clone(),
+    ))));
     Hq::open_with_github(TEST_URL, &ctx.schema, Box::new(RealGithub::new(auth)))
         .expect("open HQ on the real GitHub backend")
 }

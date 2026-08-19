@@ -54,8 +54,9 @@ cargo build --release
 # 3. Enroll a repo. The first scan writes the Baseline; the Gate starts after that.
 hq enroll github sunfmin/whats-hot --revision main
 
-# 4. Scan it with real engines
-hq scan sunfmin/whats-hot --workspace path/to/clone --use gitleaks,trivy,opengrep
+# 4. Scan it with real engines. HQ clones the Revision itself; pass
+#    --workspace only to point it at a checkout you already have.
+hq scan sunfmin/whats-hot --use gitleaks,trivy,opengrep
 
 # 5. See the Findings
 hq findings
@@ -130,6 +131,12 @@ Every delivery's HMAC signature is verified before anything happens; an unverifi
 A delivery id HQ has already handled is not handled again. An event about a repo that is not Enrolled, or a Target whose Baseline is not written yet, is a no-op — Enrollment is opt-in and Baseline day fails nothing.
 
 Deliveries are handled one at a time. Concurrency needs the Scan queue, which is not built yet.
+
+### Workspaces
+
+HQ gets the Revision on disk itself: a one-commit fetch of the exact branch or commit, into a temporary directory it removes when the Scan ends — including when an Engine fails. Private Targets work because the fetch carries the App's installation token, passed through git's environment rather than a remote URL, so nothing on disk and nothing in `ps` output holds a credential. A clone that fails is a failed Scan, never a clean Target.
+
+Point it at a different host with `HQ_GITHUB_CLONE_BASE` (GitHub Enterprise), and pass `--workspace` to skip cloning entirely when you already have a checkout.
 
 ## Agent interface
 

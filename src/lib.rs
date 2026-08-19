@@ -7,6 +7,7 @@ pub mod github;
 pub mod service;
 pub mod store;
 pub mod webhook;
+pub mod workspace;
 
 pub use cli::run;
 pub use service::Hq;

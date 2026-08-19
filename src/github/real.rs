@@ -7,6 +7,7 @@
 use crate::domain::{Annotation, CheckRun, PrFile};
 use crate::github::app::{AppAuth, Method};
 use crate::github::Github;
+use std::sync::{Arc, Mutex};
 
 /// The Check Run's name on GitHub. A Developer looks for this in the checks list.
 pub const CHECK_NAME: &str = "hq";
@@ -16,22 +17,37 @@ const ANNOTATION_BATCH: usize = 50;
 const TITLE_LIMIT: usize = 255;
 
 pub struct RealGithub {
-    auth: AppAuth,
+    /// Shared with whatever else needs installation tokens — the checkout, in
+    /// particular — so one token is minted per installation, not one per user.
+    auth: Arc<Mutex<AppAuth>>,
 }
 
 impl RealGithub {
-    pub fn new(auth: AppAuth) -> Self {
+    pub fn new(auth: Arc<Mutex<AppAuth>>) -> Self {
         Self { auth }
     }
 
     pub fn from_env() -> Result<Self, String> {
-        Ok(Self::new(AppAuth::from_env()?))
+        Ok(Self::new(Arc::new(Mutex::new(AppAuth::from_env()?))))
+    }
+
+    fn call(
+        &self,
+        repo: &str,
+        method: Method,
+        path: &str,
+        body: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, String> {
+        self.auth
+            .lock()
+            .map_err(|_| "App auth is poisoned".to_string())?
+            .call_for_repo(repo, method, path, body)
     }
 
     /// The id of the Check Run HQ already wrote for this Revision, if any.
     fn existing_check(&mut self, repo: &str, head_sha: &str) -> Result<Option<u64>, String> {
         let path = format!("/repos/{repo}/commits/{head_sha}/check-runs?check_name={CHECK_NAME}");
-        let body = self.auth.call_for_repo(repo, Method::Get, &path, None)?;
+        let body = self.call(repo, Method::Get, &path, None)?;
         Ok(body
             .get("check_runs")
             .and_then(|r| r.as_array())
@@ -95,15 +111,12 @@ impl Github for RealGithub {
         let run = match existing {
             Some(id) => {
                 let path = format!("/repos/{}/check-runs/{id}", check.repo);
-                self.auth
-                    .call_for_repo(&check.repo, Method::Patch, &path, Some(payload))?;
+                self.call(&check.repo, Method::Patch, &path, Some(payload))?;
                 id
             }
             None => {
                 let path = format!("/repos/{}/check-runs", check.repo);
-                let created =
-                    self.auth
-                        .call_for_repo(&check.repo, Method::Post, &path, Some(payload))?;
+                let created = self.call(&check.repo, Method::Post, &path, Some(payload))?;
                 created
                     .get("id")
                     .and_then(|id| id.as_u64())
@@ -116,8 +129,7 @@ impl Github for RealGithub {
         for batch in batches {
             let path = format!("/repos/{}/check-runs/{run}", check.repo);
             let payload = serde_json::json!({ "output": output(&check, batch) });
-            self.auth
-                .call_for_repo(&check.repo, Method::Patch, &path, Some(payload))?;
+            self.call(&check.repo, Method::Patch, &path, Some(payload))?;
         }
         Ok(())
     }

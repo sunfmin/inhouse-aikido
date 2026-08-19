@@ -11,6 +11,14 @@ pub enum EngineError {
 
 pub trait Engine: Send + Sync {
     fn name(&self) -> &str;
+
+    /// Does this Engine read the Target's files? An Engine that does makes HQ
+    /// clone the Revision; one that does not (the fake, or an image scan) does
+    /// not pay for a checkout.
+    fn needs_workspace(&self) -> bool {
+        true
+    }
+
     fn scan(
         &self,
         target: &Target,
@@ -36,6 +44,10 @@ impl FakeEngine {
 impl Engine for FakeEngine {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn needs_workspace(&self) -> bool {
+        false
     }
 
     fn scan(

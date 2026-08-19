@@ -183,11 +183,21 @@ fn open_hq(cli: &Cli) -> Result<Hq, String> {
 pub fn open_hq_for(database_url: &str, schema: &str, backend: &str) -> Result<Hq, String> {
     match backend {
         "fake" => Hq::open(database_url, schema),
-        "real" | "github" => Hq::open_with_github(
-            database_url,
-            schema,
-            Box::new(crate::github::real::RealGithub::from_env()?),
-        ),
+        "real" | "github" => {
+            // One AppAuth, shared: the Gate and the clone use the same
+            // installation token cache.
+            let auth = std::sync::Arc::new(std::sync::Mutex::new(
+                crate::github::app::AppAuth::from_env()?,
+            ));
+            let hq = Hq::open_with_github(
+                database_url,
+                schema,
+                Box::new(crate::github::real::RealGithub::new(auth.clone())),
+            )?;
+            Ok(hq.with_checkout(Box::new(crate::workspace::GitCheckout::new(Box::new(
+                auth,
+            )))))
+        }
         other => Err(format!(
             "unknown --github-backend {other}: expected `fake` or `real`"
         )),
