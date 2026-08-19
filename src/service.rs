@@ -8,17 +8,33 @@ use crate::store::Store;
 
 pub struct Hq {
     pub store: Store,
+    /// Chosen when HQ is constructed, never loaded from the Store's state.
+    pub github: Box<dyn Github>,
 }
 
 impl Hq {
+    /// Open HQ on the fake GitHub backend — the default for tests and local
+    /// development. Its checks and PRs are restored from the previous invocation.
     pub fn open(url: &str, schema: &str) -> Result<Self, String> {
+        let store = Store::open(url, schema)?;
+        let github = Box::new(store.load_fake_github()?);
+        Ok(Self { store, github })
+    }
+
+    /// Open HQ on a caller-chosen GitHub backend.
+    pub fn open_with_github(
+        url: &str,
+        schema: &str,
+        github: Box<dyn Github>,
+    ) -> Result<Self, String> {
         Ok(Self {
             store: Store::open(url, schema)?,
+            github,
         })
     }
 
     pub fn save(&self) -> Result<(), String> {
-        self.store.save()
+        self.store.save(self.github.as_ref())
     }
 
     pub fn enroll(
@@ -327,11 +343,7 @@ impl Hq {
                 path: manifest.clone(),
                 content: format!("# pin {package} = {fixed}\n"),
             }];
-            let pr = self
-                .store
-                .state
-                .github
-                .open_pr(target, &title, &body, files);
+            let pr = self.github.open_pr(target, &title, &body, files);
             self.store.state.remediations.push(Remediation {
                 target: target.to_string(),
                 manifest,
@@ -554,7 +566,7 @@ impl Hq {
                 summary: "engines failed".into(),
                 annotations: vec![],
             };
-            self.store.state.github.upsert_check(check);
+            self.github.upsert_check(check);
             return Ok(format!("gate=failure reason=engines_failed pr={pr}"));
         }
         let target = self
@@ -606,7 +618,7 @@ impl Hq {
                     .join(", ")
             )
         };
-        self.store.state.github.upsert_check(CheckRun {
+        self.github.upsert_check(CheckRun {
             repo: repo.to_string(),
             pr,
             conclusion: conclusion.into(),
@@ -681,6 +693,6 @@ impl Hq {
     }
 
     pub fn github_dump(&self) -> String {
-        serde_json::to_string_pretty(&self.store.state.github.dump()).unwrap()
+        serde_json::to_string_pretty(&self.github.dump()).unwrap()
     }
 }

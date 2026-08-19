@@ -1,9 +1,9 @@
 use crate::domain::{
-    CheckRun, Finding, FindingKind, FindingState, Fingerprint, Observation, OpenedPr, Remediation,
-    Revision, Target, TargetId, TargetKind,
+    Finding, FindingKind, FindingState, Fingerprint, Observation, Remediation, Revision, Target,
+    TargetId, TargetKind,
 };
 use crate::engine::FakeEngine;
-use crate::github::FakeGithub;
+use crate::github::{FakeGithub, Github};
 use postgres::{Client, NoTls};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -94,7 +94,6 @@ pub struct State {
     pub targets: HashMap<String, Target>,
     pub findings: HashMap<String, Finding>,
     pub remediations: Vec<Remediation>,
-    pub github: FakeGithub,
     pub fake: FakeBundle,
 }
 
@@ -138,15 +137,28 @@ impl Store {
         })
     }
 
-    pub fn save(&self) -> Result<(), String> {
+    /// Persist HQ's own state, plus whatever the GitHub backend keeps locally,
+    /// in one transaction.
+    pub fn save(&self, github: &dyn Github) -> Result<(), String> {
         let mut client = connect(&self.url)?;
         client
             .batch_execute(&format!("SET search_path TO {}", self.schema))
             .map_err(|e| e.to_string())?;
         let mut tx = client.transaction().map_err(|e| e.to_string())?;
         persist(&mut tx, &self.state)?;
+        github.persist(&mut tx)?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    /// The fake backend's rows from an earlier invocation. Only the fake backend
+    /// has any; a real one reads GitHub instead.
+    pub fn load_fake_github(&self) -> Result<FakeGithub, String> {
+        let mut client = connect(&self.url)?;
+        client
+            .batch_execute(&format!("SET search_path TO {}", self.schema))
+            .map_err(|e| e.to_string())?;
+        FakeGithub::load(&mut client)
     }
 
     pub fn fake_engine(&self, name: &str) -> FakeEngine {
@@ -172,7 +184,7 @@ fn validate_ident(s: &str) -> Result<(), String> {
 fn persist(tx: &mut postgres::Transaction<'_>, state: &State) -> Result<(), String> {
     tx.batch_execute(
         "TRUNCATE observations, baseline_fps, remediation_fps, remediations, findings, targets,
-                  github_checks, github_prs, github_meta, fake_obs, fake_fail CASCADE",
+                  fake_obs, fake_fail CASCADE",
     )
     .map_err(|e| e.to_string())?;
 
@@ -257,28 +269,6 @@ fn persist(tx: &mut postgres::Transaction<'_>, state: &State) -> Result<(), Stri
             .map_err(|e| e.to_string())?;
         }
     }
-
-    for c in &state.github.checks {
-        let ann = serde_json::to_value(&c.annotations).map_err(|e| e.to_string())?;
-        tx.execute(
-            "INSERT INTO github_checks (repo, pr, conclusion, summary, annotations) VALUES ($1,$2,$3,$4,$5)",
-            &[&c.repo, &(c.pr as i64), &c.conclusion, &c.summary, &ann],
-        )
-        .map_err(|e| e.to_string())?;
-    }
-    for p in &state.github.prs {
-        let files = serde_json::to_value(&p.files).map_err(|e| e.to_string())?;
-        tx.execute(
-            "INSERT INTO github_prs (repo, number, title, body, files) VALUES ($1,$2,$3,$4,$5)",
-            &[&p.repo, &(p.number as i64), &p.title, &p.body, &files],
-        )
-        .map_err(|e| e.to_string())?;
-    }
-    tx.execute(
-        "INSERT INTO github_meta (k, v) VALUES ('next_pr', $1)",
-        &[&(state.github.next_pr as i64)],
-    )
-    .map_err(|e| e.to_string())?;
 
     for (k, obs) in &state.fake.observations {
         for o in obs {
@@ -405,42 +395,6 @@ fn load(client: &mut Client) -> Result<State, String> {
             });
         }
         state.remediations.push(r);
-    }
-
-    for row in client
-        .query(
-            "SELECT repo, pr, conclusion, summary, annotations FROM github_checks",
-            &[],
-        )
-        .map_err(|e| e.to_string())?
-    {
-        let ann: serde_json::Value = row.get(4);
-        state.github.checks.push(CheckRun {
-            repo: row.get(0),
-            pr: row.get::<_, i64>(1) as u64,
-            conclusion: row.get(2),
-            summary: row.get(3),
-            annotations: serde_json::from_value(ann).unwrap_or_default(),
-        });
-    }
-    for row in client
-        .query(
-            "SELECT repo, number, title, body, files FROM github_prs",
-            &[],
-        )
-        .map_err(|e| e.to_string())?
-    {
-        let files: serde_json::Value = row.get(4);
-        state.github.prs.push(OpenedPr {
-            repo: row.get(0),
-            number: row.get::<_, i64>(1) as u64,
-            title: row.get(2),
-            body: row.get(3),
-            files: serde_json::from_value(files).unwrap_or_default(),
-        });
-    }
-    if let Ok(row) = client.query_one("SELECT v FROM github_meta WHERE k = 'next_pr'", &[]) {
-        state.github.next_pr = row.get::<_, i64>(0) as u64;
     }
 
     for row in client
