@@ -109,6 +109,7 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
                     line: None,
                     scope: Default::default(),
                     severity,
+                    secret: None,
                 });
             }
         }
@@ -128,6 +129,7 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
                     scope: Default::default(),
                     line,
                     severity,
+                    secret: None,
                 });
             }
         }
@@ -152,6 +154,7 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
                     line: None,
                     scope: Default::default(),
                     severity: Severity::Unknown,
+                    secret: None,
                 });
             }
         }

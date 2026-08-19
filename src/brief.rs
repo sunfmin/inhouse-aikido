@@ -18,6 +18,8 @@ pub struct FindingView {
     pub epss: Option<f64>,
     /// On CISA's Known Exploited Vulnerabilities list.
     pub known_exploited: bool,
+    /// For a secret: active, inactive, or unverified.
+    pub validity: String,
     pub engines: Vec<String>,
     pub package: Option<String>,
     pub manifest: Option<String>,
@@ -42,6 +44,7 @@ impl FindingView {
             severity: f.severity.as_str().to_string(),
             epss: f.epss,
             known_exploited: f.known_exploited,
+            validity: f.validity.as_str().to_string(),
             fingerprint: f.fingerprint.display(),
             target: f.fingerprint.target.clone(),
             problem_id: f.fingerprint.problem_id.clone(),

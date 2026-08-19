@@ -1,4 +1,4 @@
-use crate::domain::{FindingKind, Observation, Revision, Severity, Target};
+use crate::domain::{FindingKind, LeakedSecret, Observation, Revision, Severity, Target};
 use crate::engine::{engine_timeout, run_with_timeout, Engine, EngineError};
 use serde::Deserialize;
 use std::path::Path;
@@ -14,6 +14,10 @@ pub struct GitleaksHit {
     pub description: Option<String>,
     #[serde(rename = "StartLine", alias = "startLine")]
     pub start_line: Option<u32>,
+    /// The matched credential. HQ uses it to ask the provider whether it still
+    /// works, and then drops it — it is never stored.
+    #[serde(rename = "Secret", alias = "secret")]
+    pub secret: Option<String>,
 }
 
 pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError> {
@@ -41,6 +45,7 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
                 // gitleaks reports no severity. A live credential in a repo is
                 // not a "medium", so HQ does not pretend it is unranked.
                 severity: Severity::High,
+                secret: h.secret.filter(|s| !s.is_empty()).map(LeakedSecret::new),
             }
         })
         .collect())

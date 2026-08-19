@@ -30,6 +30,7 @@ fn secret_obs(problem: &str) -> Observation {
         line: Some(7),
         scope: Default::default(),
         severity: Default::default(),
+        secret: None,
     }
 }
 

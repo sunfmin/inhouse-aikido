@@ -76,6 +76,70 @@ pub enum FindingKind {
     License,
 }
 
+/// A leaked credential the Engine handed HQ so it can be checked against its
+/// provider. Never persisted, never logged, never printed.
+#[derive(Clone, PartialEq, Eq)]
+pub struct LeakedSecret(String);
+
+impl LeakedSecret {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// The only way to read it. Callers must not copy it anywhere that lasts.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for LeakedSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LeakedSecret(redacted)")
+    }
+}
+
+/// Does a leaked credential still authenticate?
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Validity {
+    /// It still works. Not debt — an incident.
+    Active,
+    /// Nobody asked, or nobody could tell.
+    #[default]
+    Unverified,
+    /// The provider no longer accepts it.
+    Inactive,
+}
+
+impl Validity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Validity::Active => "active",
+            Validity::Unverified => "unverified",
+            Validity::Inactive => "inactive",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Validity> {
+        match s {
+            "active" => Some(Validity::Active),
+            "unverified" => Some(Validity::Unverified),
+            "inactive" => Some(Validity::Inactive),
+            _ => None,
+        }
+    }
+
+    /// Sorted first, so a live leaked key is the first thing anybody sees, and
+    /// a dead one is the last.
+    pub fn rank(self) -> u8 {
+        match self {
+            Validity::Active => 0,
+            Validity::Unverified => 1,
+            Validity::Inactive => 2,
+        }
+    }
+}
+
 /// How bad the problem is, as the Engine reports it.
 ///
 /// Ordered worst-last so `max` picks the worst of several Engines' opinions.
@@ -184,6 +248,11 @@ pub struct Observation {
     /// How bad the Engine that saw it says it is.
     #[serde(default)]
     pub severity: Severity,
+    /// The credential itself, when the Engine found one and HQ is going to ask
+    /// the provider about it. Skipped by serde on purpose: it must not reach
+    /// the Store, a log, or a dump.
+    #[serde(skip)]
+    pub secret: Option<LeakedSecret>,
 }
 
 impl Observation {
@@ -224,6 +293,10 @@ pub struct Finding {
     /// report that it has already been used.
     #[serde(default)]
     pub known_exploited: bool,
+    /// For a secret: does the credential still authenticate? Only the verdict
+    /// is kept — never the credential.
+    #[serde(default)]
+    pub validity: Validity,
 }
 
 impl Finding {
@@ -250,8 +323,9 @@ impl Finding {
     /// Most urgent first. Something already being exploited outranks any
     /// prediction; after that it is severity, then the prediction, then the
     /// Fingerprint so the order never wobbles between runs.
-    pub fn risk_key(&self) -> (bool, Severity, u64, String) {
+    pub fn risk_key(&self) -> (u8, bool, Severity, u64, String) {
         (
+            self.validity.rank(),
             self.known_exploited,
             self.severity,
             (self.epss.unwrap_or(0.0) * 1_000_000.0) as u64,
@@ -259,9 +333,25 @@ impl Finding {
         )
     }
 
+    /// Does this Finding block a merge on its own?
+    ///
+    /// A live leaked credential does, Baseline or not — a key somebody can use
+    /// right now is an incident, not debt HQ agreed to live with. A credential
+    /// the provider has already stopped accepting does not.
+    pub fn gates_regardless_of_baseline(&self) -> bool {
+        self.kind == FindingKind::Secret && self.validity == Validity::Active
+    }
+
+    pub fn is_dead_secret(&self) -> bool {
+        self.kind == FindingKind::Secret && self.validity == Validity::Inactive
+    }
+
     /// One line an Operator or an agent can rank on.
     pub fn risk_summary(&self) -> String {
         let mut out = format!("severity={}", self.severity.as_str());
+        if self.kind == FindingKind::Secret {
+            out.push_str(&format!(" validity={}", self.validity.as_str()));
+        }
         if let Some(epss) = self.epss {
             out.push_str(&format!(" epss={epss:.4}"));
         }

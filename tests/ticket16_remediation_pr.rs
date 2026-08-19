@@ -255,6 +255,7 @@ fn sca(problem: &str, manifest: &str, package: &str, fixed: Option<&str>) -> Obs
         line: None,
         scope: Default::default(),
         severity: Default::default(),
+        secret: None,
     }
 }
 
@@ -369,6 +370,7 @@ fn secrets_sast_and_iac_still_get_no_remediation() {
                 line: Some(3),
                 scope: Default::default(),
                 severity: Default::default(),
+                secret: None,
             },
         );
     }

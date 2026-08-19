@@ -1,13 +1,14 @@
 use crate::domain::PrRequest;
 use crate::domain::{
     Annotation, CheckRun, Finding, FindingKind, FindingState, Fingerprint, Observation,
-    Remediation, Revision, Scope, Severity, Target, TargetId, TargetKind,
+    Remediation, Revision, Scope, Severity, Target, TargetId, TargetKind, Validity,
 };
 use crate::engine::{Engine, FakeEngine};
 use crate::github::Github;
 use crate::intel::{CveIntel, IntelSource, NoIntel};
 use crate::remediation::{Remediator, SyntheticRemediator, UnconfiguredRemediator};
 use crate::store::Store;
+use crate::verify::{NoVerification, SecretVerifier};
 use crate::workspace::{Checkout, GitCheckout, Workspace};
 
 /// What one Scan saw. Engines that failed are named, so a Gate can fail closed
@@ -20,6 +21,9 @@ pub struct ScanOutcome {
     /// What the public sources say about the CVEs this Scan saw. Fetched in the
     /// slow half, so the write path does no network I/O.
     pub intel: std::collections::HashMap<String, CveIntel>,
+    /// Whether each leaked credential still authenticates, keyed by Fingerprint.
+    /// The verdict travels; the credential does not.
+    pub validity: std::collections::HashMap<String, Validity>,
 }
 
 pub struct Hq {
@@ -35,6 +39,9 @@ pub struct Hq {
     pub intel: Box<dyn IntelSource>,
     /// How long cached intel is trusted before it is fetched again.
     pub intel_ttl: std::time::Duration,
+    /// Whether a leaked credential still authenticates. Off by default: HQ does
+    /// not hand a Target's secrets to a third party unasked.
+    pub verifier: Box<dyn SecretVerifier>,
 }
 
 /// What a Developer reads first on the PR: how bad it is, whether anyone is
@@ -48,6 +55,9 @@ fn annotation_title(f: &Finding, gates: bool) -> String {
     );
     if f.known_exploited {
         title.push_str(" known-exploited");
+    }
+    if f.kind == FindingKind::Secret && f.validity != Validity::Unverified {
+        title.push_str(&format!(" credential={}", f.validity.as_str()));
     }
     if !gates {
         title.push_str(&format!(" ({} dependency)", f.scope().as_str()));
@@ -67,6 +77,8 @@ pub struct FindingFilter<'a> {
     pub min_severity: Option<Severity>,
     /// Only what CISA says is already being exploited.
     pub known_exploited: bool,
+    /// Only credentials with this verdict.
+    pub validity: Option<Validity>,
 }
 
 /// How long HQ trusts a cached EPSS score or KEV entry. A day: the feeds are
@@ -92,6 +104,7 @@ impl Hq {
             remediator: Box::new(SyntheticRemediator),
             intel: Box::new(NoIntel),
             intel_ttl: default_intel_ttl(),
+            verifier: Box::new(NoVerification),
         })
     }
 
@@ -110,6 +123,7 @@ impl Hq {
             remediator: Box::new(UnconfiguredRemediator),
             intel: Box::new(NoIntel),
             intel_ttl: default_intel_ttl(),
+            verifier: Box::new(NoVerification),
         })
     }
 
@@ -127,6 +141,11 @@ impl Hq {
 
     pub fn with_intel(mut self, intel: Box<dyn IntelSource>) -> Self {
         self.intel = intel;
+        self
+    }
+
+    pub fn with_verifier(mut self, verifier: Box<dyn SecretVerifier>) -> Self {
+        self.verifier = verifier;
         self
     }
 
@@ -340,11 +359,18 @@ impl Hq {
         // whether it is shipped. Read them while the workspace is still here.
         crate::scope::enrich(workspace, &mut observations);
         let intel = self.lookup_intel(&observations);
+        let validity = self.verify_secrets(name, &observations);
+        // The credentials leave with the Observations they came in on. Nothing
+        // downstream of here has ever seen one.
+        for obs in observations.iter_mut() {
+            obs.secret = None;
+        }
         Ok(ScanOutcome {
             revision: rev,
             observations,
             failed_engines: failed,
             intel,
+            validity,
         })
     }
 
@@ -372,7 +398,7 @@ impl Hq {
         let observations = &outcome.observations;
         let was_baseline = target.baseline_ready;
         self.apply_observations(name, &rev, observations, is_pr);
-        self.rank_findings(name, &outcome.intel);
+        self.rank_findings(name, &outcome.intel, &outcome.validity);
         let mut msg = format!(
             "scanned {name}@{} observations={}",
             rev.0,
@@ -439,12 +465,44 @@ impl Hq {
         known
     }
 
+    /// Ask each leaked credential's provider whether it still works.
+    ///
+    /// Only the verdict comes back. A provider HQ cannot reach leaves the
+    /// Finding Unverified — never Inactive, because calling a live key dead is
+    /// the one wrong answer that lets a real incident through.
+    fn verify_secrets(
+        &self,
+        target: &str,
+        observations: &[Observation],
+    ) -> std::collections::HashMap<String, Validity> {
+        let mut out = std::collections::HashMap::new();
+        if !self.verifier.enabled() {
+            return out;
+        }
+        for obs in observations {
+            let Some(secret) = obs.secret.as_ref() else {
+                continue;
+            };
+            let verdict = self.verifier.check(&obs.problem_id, secret.expose());
+            out.insert(obs.fingerprint(target).display(), verdict);
+        }
+        out
+    }
+
     /// Give every Finding of this Target the severity its Engines reported and
     /// the intel its CVE carries.
-    fn rank_findings(&mut self, target: &str, intel: &std::collections::HashMap<String, CveIntel>) {
+    fn rank_findings(
+        &mut self,
+        target: &str,
+        intel: &std::collections::HashMap<String, CveIntel>,
+        validity: &std::collections::HashMap<String, Validity>,
+    ) {
         for finding in self.store.state.findings.values_mut() {
             if finding.fingerprint.target != target {
                 continue;
+            }
+            if let Some(verdict) = validity.get(&finding.fingerprint.display()) {
+                finding.validity = *verdict;
             }
             finding.severity = finding
                 .observations
@@ -490,6 +548,7 @@ impl Hq {
                     epss: None,
                     epss_percentile: None,
                     known_exploited: false,
+                    validity: Validity::Unverified,
                 });
             finding.kind = obs.kind;
             finding.last_revision = Some(rev.clone());
@@ -672,6 +731,7 @@ impl Hq {
             scope,
             min_severity,
             known_exploited: known_exploited_only,
+            validity,
         } = *filter;
         let mut items: Vec<&Finding> = self
             .store
@@ -700,15 +760,17 @@ impl Hq {
             .filter(|f| scope.is_none_or(|s| Scope::parse(s) == Some(f.scope())))
             .filter(|f| min_severity.is_none_or(|m| f.severity >= m))
             .filter(|f| !known_exploited_only || f.known_exploited)
+            .filter(|f| validity.is_none_or(|v| f.validity == v))
             .collect();
         // Most urgent first: already exploited, then severity, then the
         // prediction, then the Fingerprint so the order never wobbles.
         items.sort_by(|a, b| {
             let (a, b) = (a.risk_key(), b.risk_key());
-            b.0.cmp(&a.0)
+            a.0.cmp(&b.0)
                 .then(b.1.cmp(&a.1))
                 .then(b.2.cmp(&a.2))
-                .then(a.3.cmp(&b.3))
+                .then(b.3.cmp(&a.3))
+                .then(a.4.cmp(&b.4))
         });
         items
     }
@@ -780,8 +842,10 @@ impl Hq {
         // already exploiting outranks a secret nobody has touched, but within
         // one severity a leaked credential is still the first thing to fix.
         items.sort_by(|a, b| {
-            b.known_exploited
-                .cmp(&a.known_exploited)
+            a.validity
+                .rank()
+                .cmp(&b.validity.rank())
+                .then(b.known_exploited.cmp(&a.known_exploited))
                 .then(b.severity.cmp(&a.severity))
                 .then(crate::brief::pickup_rank(a).cmp(&crate::brief::pickup_rank(b)))
                 .then(b.epss.unwrap_or(0.0).total_cmp(&a.epss.unwrap_or(0.0)))
@@ -939,8 +1003,12 @@ impl Hq {
             let on_baseline = baseline.iter().any(|b| b == &f.fingerprint);
             // A new Finding in a build-only dependency is real debt, so it is
             // still Open and still annotated — it just does not block a merge
-            // nobody is any less safe for making.
-            let gates = f.scope().gates() || gate_dev_scope;
+            // nobody is any less safe for making. Neither does a credential the
+            // provider has already stopped accepting.
+            let gates = (f.scope().gates() || gate_dev_scope) && !f.is_dead_secret();
+            // A credential somebody can use right now is an incident, not debt:
+            // it blocks the merge even though it is on the Baseline.
+            let live_secret = f.gates_regardless_of_baseline();
             let line = f.observations.iter().find_map(|o| o.line).unwrap_or(1);
             let detail = f
                 .observations
@@ -960,7 +1028,9 @@ impl Hq {
                 end_line: line,
                 // Known debt is a warning; only a Finding that is new to this
                 // Target is what blocks the merge.
-                level: if on_baseline || !gates {
+                level: if live_secret {
+                    "failure"
+                } else if on_baseline || !gates {
                     "warning"
                 } else {
                     "failure"
@@ -968,7 +1038,7 @@ impl Hq {
                 .into(),
                 title: annotation_title(f, gates),
             });
-            if !on_baseline && gates {
+            if live_secret || (!on_baseline && gates) {
                 new_open.push(f.fingerprint.clone());
             }
         }
@@ -981,7 +1051,7 @@ impl Hq {
             "no new open findings".into()
         } else {
             format!(
-                "new open findings: {}",
+                "blocking findings: {}",
                 new_open
                     .iter()
                     .map(|f| f.display())

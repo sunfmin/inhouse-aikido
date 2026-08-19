@@ -61,6 +61,7 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
                     .and_then(|e| e.severity.as_deref())
                     .and_then(Severity::parse)
                     .unwrap_or(Severity::Unknown),
+                secret: None,
                 message: extra.and_then(|e| e.message).unwrap_or_default(),
             }
         })

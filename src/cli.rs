@@ -22,6 +22,11 @@ pub struct Cli {
     /// outbound call.
     #[arg(long, env = "HQ_INTEL_BACKEND", default_value = "fake")]
     pub intel_backend: String,
+    /// Whether HQ asks a leaked credential's provider if it still works:
+    /// `off` (the default) or `real`. Verification sends the credential to its
+    /// own provider and nowhere else, and is an Operator's decision to make.
+    #[arg(long, env = "HQ_VERIFY_SECRETS", default_value = "off")]
+    pub verify_secrets: String,
     #[command(subcommand)]
     pub cmd: Cmd,
 }
@@ -109,6 +114,9 @@ pub enum Cmd {
         /// Only CVEs CISA says are already being exploited
         #[arg(long, default_value_t = false)]
         known_exploited: bool,
+        /// Secrets only: active, inactive, or unverified
+        #[arg(long)]
+        validity: Option<String>,
     },
     /// Change what a Target's Gate blocks on.
     Policy {
@@ -257,12 +265,13 @@ where
 }
 
 fn open_hq(cli: &Cli) -> Result<Hq, String> {
-    open_hq_for(
+    Ok(open_hq_for(
         &cli.database_url,
         &cli.schema,
         &cli.github_backend,
         &cli.intel_backend,
-    )
+    )?
+    .with_verifier(secret_verifier(&cli.verify_secrets)?))
 }
 
 /// Open HQ on the named backend. Shared with `hq serve`, which opens one per
@@ -275,6 +284,18 @@ pub fn open_hq_for(
 ) -> Result<Hq, String> {
     let hq = open_on_github(database_url, schema, backend)?;
     Ok(hq.with_intel(intel_source(intel_backend)?))
+}
+
+/// `off` is the default and makes no call: HQ does not hand a Target's
+/// credentials to a third party unless an Operator asks it to.
+fn secret_verifier(backend: &str) -> Result<Box<dyn crate::verify::SecretVerifier>, String> {
+    match backend {
+        "off" | "none" | "fake" => Ok(Box::new(crate::verify::NoVerification)),
+        "real" | "providers" => Ok(Box::new(crate::verify::ProviderVerifier::new())),
+        other => Err(format!(
+            "unknown --verify-secrets {other}: expected `off` or `real`"
+        )),
+    }
 }
 
 /// `fake` reads the intel cache and nothing else — no outbound call HQ was not
@@ -512,6 +533,7 @@ fn dispatch(hq: &mut Hq, cmd: Cmd) -> Result<String, String> {
                     line,
                     scope,
                     severity,
+                    secret: None,
                 },
             );
             Ok("ok".into())
@@ -561,6 +583,7 @@ fn dispatch(hq: &mut Hq, cmd: Cmd) -> Result<String, String> {
             scope,
             min_severity,
             known_exploited,
+            validity,
         } => {
             if let Some(s) = scope.as_deref() {
                 crate::domain::Scope::parse(s)
@@ -573,6 +596,13 @@ fn dispatch(hq: &mut Hq, cmd: Cmd) -> Result<String, String> {
                         .ok_or_else(|| format!("unknown --min-severity {s}"))
                 })
                 .transpose()?;
+            let validity = validity
+                .as_deref()
+                .map(|v| {
+                    crate::domain::Validity::parse(v)
+                        .ok_or_else(|| format!("unknown --validity {v}"))
+                })
+                .transpose()?;
             let filter = crate::service::FindingFilter {
                 target: target.as_deref(),
                 state: state.as_deref(),
@@ -580,6 +610,7 @@ fn dispatch(hq: &mut Hq, cmd: Cmd) -> Result<String, String> {
                 scope: scope.as_deref(),
                 min_severity,
                 known_exploited,
+                validity,
             };
             if json {
                 hq.findings_json(&filter)

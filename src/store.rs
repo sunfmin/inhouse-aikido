@@ -1,6 +1,6 @@
 use crate::domain::{
     Finding, FindingKind, FindingState, Fingerprint, Observation, Remediation, Revision, Scope,
-    Severity, Target, TargetId, TargetKind,
+    Severity, Target, TargetId, TargetKind, Validity,
 };
 use crate::engine::FakeEngine;
 use crate::github::{FakeGithub, Github};
@@ -135,6 +135,7 @@ ALTER TABLE findings ADD COLUMN IF NOT EXISTS severity TEXT NOT NULL DEFAULT 'un
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS epss DOUBLE PRECISION;
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS epss_percentile DOUBLE PRECISION;
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS known_exploited BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS validity TEXT NOT NULL DEFAULT 'unverified';
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -399,8 +400,8 @@ fn persist(tx: &mut postgres::Transaction<'_>, state: &State) -> Result<(), Stri
     for (key, f) in &state.findings {
         tx.execute(
             "INSERT INTO findings (fp, target, problem_id, location_key, state, kind, last_revision, package, manifest, fixed_version,
-                                   severity, epss, epss_percentile, known_exploited)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
+                                   severity, epss, epss_percentile, known_exploited, validity)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)",
             &[
                 key,
                 &f.fingerprint.target,
@@ -416,6 +417,7 @@ fn persist(tx: &mut postgres::Transaction<'_>, state: &State) -> Result<(), Stri
                 &f.epss,
                 &f.epss_percentile,
                 &f.known_exploited,
+                &f.validity.as_str(),
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -521,7 +523,8 @@ fn load(client: &mut Client) -> Result<State, String> {
     for row in client
         .query(
             "SELECT fp, target, problem_id, location_key, state, kind, last_revision, package,
-                    manifest, fixed_version, severity, epss, epss_percentile, known_exploited
+                    manifest, fixed_version, severity, epss, epss_percentile, known_exploited,
+                    validity
              FROM findings",
             &[],
         )
@@ -546,6 +549,7 @@ fn load(client: &mut Client) -> Result<State, String> {
             epss: row.get(11),
             epss_percentile: row.get(12),
             known_exploited: row.get(13),
+            validity: Validity::parse(row.get(14)).unwrap_or_default(),
         };
         for o in client
             .query(
@@ -566,6 +570,8 @@ fn load(client: &mut Client) -> Result<State, String> {
                 line: o.get::<_, Option<i32>>(8).map(|l| l as u32),
                 scope: Scope::parse(o.get(9)).unwrap_or_default(),
                 severity: Severity::parse(o.get(10)).unwrap_or_default(),
+                // The credential itself is never read back: it was never stored.
+                secret: None,
             });
         }
         state.findings.insert(fp_key, finding);

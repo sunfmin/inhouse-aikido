@@ -37,6 +37,7 @@ fn obs(problem: &str, location: &str, kind: FindingKind, line: Option<u32>) -> O
         line,
         scope: Default::default(),
         severity: Default::default(),
+        secret: None,
     }
 }
 

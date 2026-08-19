@@ -10,6 +10,7 @@ pub mod remediation;
 pub mod scope;
 pub mod service;
 pub mod store;
+pub mod verify;
 pub mod webhook;
 pub mod worker;
 pub mod workspace;

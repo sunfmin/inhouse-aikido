@@ -73,7 +73,7 @@ hq [OPTIONS] <COMMAND>
   unenroll      Stop tracking a Target
   targets       List Targets
   scan          Run Engines against a Target
-  findings      List Findings, most urgent first (--target/--state/--kind/--scope/--min-severity/--known-exploited)
+  findings      List Findings, most urgent first (--target/--state/--kind/--scope/--min-severity/--known-exploited/--validity)
   policy        Change what a Target's Gate blocks on
   show          One Finding as JSON
   brief         Agent Brief for one Finding, or the next agent-fixable Open Finding
@@ -126,6 +126,19 @@ The order is: known-exploited, then severity, then EPSS, then Fingerprint — so
 Intel is a port. `--intel-backend fake` (the default) makes no outbound call and reads only what is cached; `real` reads EPSS and CISA's KEV, once per Scan for all its CVEs, cached in Postgres for a day (`HQ_INTEL_TTL_HOURS`). Point it at a mirror with `HQ_EPSS_API` and `HQ_KEV_FEED`. A source that is down leaves Findings ranked on Engine severity rather than failing the Scan.
 
 The Gate rule is unchanged: new is what fails, at any severity. Severity ranks what to look at; scope decides what blocks. See [ADR 0023](docs/adr/0023-exploitability-intel.md).
+
+### Secret validity
+
+A key rotated last year and a key somebody can use right now look identical in a Scan report. With `--verify-secrets real`, HQ asks the credential's own provider — one read-only identity call, and nothing that could change the account.
+
+```sh
+hq --verify-secrets real scan acme/web --use gitleaks
+hq findings --validity active        # the ones that are actually live
+```
+
+A **live** credential fails the Gate even when its Fingerprint is on the Baseline: a key an attacker can use right now is an incident, not debt HQ agreed to live with. An **inactive** one does not fail the Gate on its own and sorts below everything else. A provider HQ cannot reach leaves the Finding **unverified** — never inactive, because calling a live key dead is the one wrong answer that lets a real incident through.
+
+The credential itself is never stored, logged, or put in a Check Run; only the verdict is. Which provider to ask comes from the token's own prefix — GitHub, npm, Slack, and OpenAI today, and adding another is one registry entry. Verification is off unless an Operator turns it on. See [ADR 0024](docs/adr/0024-secret-validity.md).
 
 ### The GitHub App
 
