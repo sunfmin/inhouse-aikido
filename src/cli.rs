@@ -123,6 +123,25 @@ pub enum Cmd {
         #[arg(long)]
         validity: Option<String>,
     },
+    /// The Target's dependency inventory as CycloneDX, for its last Scan.
+    Sbom {
+        name: String,
+    },
+    /// Declare which licenses are allowed, denied, or need a human.
+    LicensePolicy {
+        /// Comma-separated licenses that produce no Finding at all.
+        #[arg(long)]
+        allow: Option<String>,
+        /// Comma-separated licenses that Gate like any other new Finding.
+        #[arg(long)]
+        deny: Option<String>,
+        /// Comma-separated licenses that need a human and do not Gate.
+        #[arg(long)]
+        review: Option<String>,
+        /// Start from nothing instead of adding to what is there.
+        #[arg(long, default_value_t = false)]
+        clear: bool,
+    },
     /// Change what a Target's Gate blocks on.
     Policy {
         name: String,
@@ -440,6 +459,18 @@ fn scans_cmd(hq: &Hq, limit: i64) -> Result<String, String> {
     Ok(out.join("\n"))
 }
 
+/// A comma-separated option, with the blanks dropped.
+fn split(list: Option<String>) -> Vec<String> {
+    list.map(|l| {
+        l.split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
 fn short(revision: &str) -> String {
     if revision.len() > 12 && revision.chars().all(|c| c.is_ascii_hexdigit()) {
         revision[..12].to_string()
@@ -645,6 +676,13 @@ fn dispatch(hq: &mut Hq, cmd: Cmd) -> Result<String, String> {
                 Ok(hq.findings_text(&filter))
             }
         }
+        Cmd::Sbom { name } => hq.sbom(&name),
+        Cmd::LicensePolicy {
+            allow,
+            deny,
+            review,
+            clear,
+        } => hq.license_policy(&split(allow), &split(deny), &split(review), clear),
         Cmd::Policy {
             name,
             gate_dev_scope,

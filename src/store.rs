@@ -1,6 +1,6 @@
 use crate::domain::{
-    Finding, FindingKind, FindingState, Fingerprint, Observation, Remediation, Revision, Scope,
-    Severity, Target, TargetId, TargetKind, Validity,
+    Finding, FindingKind, FindingState, Fingerprint, LicensePolicy, Observation, Remediation,
+    Revision, Scope, Severity, Target, TargetId, TargetKind, Validity,
 };
 use crate::engine::FakeEngine;
 use crate::github::{FakeGithub, Github};
@@ -122,6 +122,24 @@ CREATE TABLE IF NOT EXISTS announced_findings (
 );
 -- What the advisory source said about a package, cached. A NULL advisory_id
 -- means "asked, and it is clean" — worth remembering too.
+-- What an Operator has decided about licenses.
+CREATE TABLE IF NOT EXISTS license_policy (
+  rule TEXT NOT NULL,
+  license TEXT NOT NULL,
+  PRIMARY KEY (rule, license)
+);
+-- The dependency inventory as of a Target's last Scan, so an SBOM can be
+-- written without a checkout.
+CREATE TABLE IF NOT EXISTS target_packages (
+  target TEXT NOT NULL,
+  revision TEXT NOT NULL,
+  ecosystem TEXT NOT NULL,
+  name TEXT NOT NULL,
+  version TEXT,
+  manifest TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  PRIMARY KEY (target, manifest, name)
+);
 CREATE TABLE IF NOT EXISTS package_advisories (
   ecosystem TEXT NOT NULL,
   name TEXT NOT NULL,
@@ -159,6 +177,8 @@ pub struct State {
     pub findings: HashMap<String, Finding>,
     pub remediations: Vec<Remediation>,
     pub fake: FakeBundle,
+    #[serde(default)]
+    pub license_policy: LicensePolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -342,6 +362,82 @@ impl Store {
         Ok(())
     }
 
+    /// Remember what a Target depends on, so an SBOM can be written later
+    /// without a checkout. Replaces the previous Scan's inventory wholesale — a
+    /// removed dependency must not linger in the SBOM.
+    pub fn record_inventory(
+        &self,
+        target: &str,
+        revision: &str,
+        packages: &[crate::inventory::Package],
+    ) -> Result<(), String> {
+        let mut client = self.client()?;
+        let mut tx = client.transaction().map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM target_packages WHERE target = $1", &[&target])
+            .map_err(|e| e.to_string())?;
+        for p in packages {
+            tx.execute(
+                "INSERT INTO target_packages (target, revision, ecosystem, name, version, manifest, scope)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (target, manifest, name) DO NOTHING",
+                &[
+                    &target,
+                    &revision,
+                    &p.ecosystem,
+                    &p.name,
+                    &p.version,
+                    &p.manifest,
+                    &p.scope.as_str(),
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// A Target's inventory as of its last Scan, and which Revision that was.
+    pub fn inventory(
+        &self,
+        target: &str,
+    ) -> Result<Option<(String, Vec<crate::inventory::Package>)>, String> {
+        let mut client = self.client()?;
+        let rows = client
+            .query(
+                "SELECT revision, ecosystem, name, version, manifest, scope FROM target_packages
+                 WHERE target = $1 ORDER BY manifest, name",
+                &[&target],
+            )
+            .map_err(|e| e.to_string())?;
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        let revision: String = rows[0].get(0);
+        let packages = rows
+            .into_iter()
+            .map(|r| crate::inventory::Package {
+                ecosystem: r.get(1),
+                name: r.get(2),
+                version: r.get(3),
+                manifest: r.get(4),
+                scope: Scope::parse(r.get(5)).unwrap_or_default(),
+            })
+            .collect();
+        Ok(Some((revision, packages)))
+    }
+
+    /// Postgres' clock, formatted the way an SBOM wants it. HQ has no time
+    /// dependency of its own and does not need one for this.
+    pub fn now_rfc3339(&self) -> Result<String, String> {
+        let mut client = self.client()?;
+        let row = client
+            .query_one(
+                "SELECT to_char(now() at time zone 'utc', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')",
+                &[],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(row.get(0))
+    }
+
     /// What HQ already asked about these packages, if the answer is still
     /// fresh. `None` in the map means "asked, and clean".
     pub fn cached_advisories(
@@ -481,9 +577,24 @@ fn validate_ident(s: &str) -> Result<(), String> {
 fn persist(tx: &mut postgres::Transaction<'_>, state: &State) -> Result<(), String> {
     tx.batch_execute(
         "TRUNCATE observations, baseline_fps, remediation_fps, remediations, findings, targets,
-                  fake_obs, fake_fail CASCADE",
+                  fake_obs, fake_fail, license_policy CASCADE",
     )
     .map_err(|e| e.to_string())?;
+
+    for (rule, licenses) in [
+        ("allow", &state.license_policy.allow),
+        ("deny", &state.license_policy.deny),
+        ("review", &state.license_policy.review),
+    ] {
+        for license in licenses {
+            tx.execute(
+                "INSERT INTO license_policy (rule, license) VALUES ($1,$2)
+                 ON CONFLICT DO NOTHING",
+                &[&rule, license],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
 
     for t in state.targets.values() {
         tx.execute(
@@ -597,6 +708,21 @@ fn persist(tx: &mut postgres::Transaction<'_>, state: &State) -> Result<(), Stri
 
 fn load(client: &mut Client) -> Result<State, String> {
     let mut state = State::default();
+
+    for row in client
+        .query(
+            "SELECT rule, license FROM license_policy ORDER BY license",
+            &[],
+        )
+        .map_err(|e| e.to_string())?
+    {
+        let license: String = row.get(1);
+        match row.get::<_, String>(0).as_str() {
+            "allow" => state.license_policy.allow.push(license),
+            "deny" => state.license_policy.deny.push(license),
+            _ => state.license_policy.review.push(license),
+        }
+    }
 
     for row in client
         .query(

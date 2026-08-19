@@ -79,6 +79,66 @@ pub enum FindingKind {
     Malicious,
 }
 
+/// What an Operator has decided about a license.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LicenseRule {
+    /// Fine. Produces no Finding at all.
+    Allowed,
+    /// Not fine. Gates like any other new Finding.
+    Denied,
+    /// A human has to look. Does not Gate, and never auto-accepts.
+    #[default]
+    Review,
+}
+
+impl LicenseRule {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LicenseRule::Allowed => "allowed",
+            LicenseRule::Denied => "denied",
+            LicenseRule::Review => "review",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<LicenseRule> {
+        match s {
+            "allowed" | "allow" => Some(LicenseRule::Allowed),
+            "denied" | "deny" => Some(LicenseRule::Denied),
+            "review" => Some(LicenseRule::Review),
+            _ => None,
+        }
+    }
+}
+
+/// Which licenses an Operator allows, denies, or wants to look at.
+///
+/// A license nobody has ruled on needs Review: HQ never decides a licensing
+/// question on an Operator's behalf, and "unlisted" is not consent.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LicensePolicy {
+    pub allow: Vec<String>,
+    pub deny: Vec<String>,
+    pub review: Vec<String>,
+}
+
+impl LicensePolicy {
+    pub fn rule_for(&self, license: &str) -> LicenseRule {
+        let matches = |list: &[String]| list.iter().any(|l| l.eq_ignore_ascii_case(license));
+        if matches(&self.deny) {
+            LicenseRule::Denied
+        } else if matches(&self.allow) {
+            LicenseRule::Allowed
+        } else {
+            LicenseRule::Review
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.allow.is_empty() && self.deny.is_empty() && self.review.is_empty()
+    }
+}
+
 /// A leaked credential the Engine handed HQ so it can be checked against its
 /// provider. Never persisted, never logged, never printed.
 #[derive(Clone, PartialEq, Eq)]

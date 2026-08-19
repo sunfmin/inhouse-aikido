@@ -75,6 +75,8 @@ hq [OPTIONS] <COMMAND>
   scan          Run Engines against a Target
   findings      List Findings, most urgent first (--target/--state/--kind/--scope/--min-severity/--known-exploited/--validity)
   policy        Change what a Target's Gate blocks on
+  license-policy  Declare which licenses are allowed, denied, or need a human
+  sbom          The Target's dependency inventory as CycloneDX
   show          One Finding as JSON
   brief         Agent Brief for one Finding, or the next agent-fixable Open Finding
   dismissed     List Dismissed Findings
@@ -126,6 +128,19 @@ The order is: known-exploited, then severity, then EPSS, then Fingerprint — so
 Intel is a port. `--intel-backend fake` (the default) makes no outbound call and reads only what is cached; `real` reads EPSS and CISA's KEV, once per Scan for all its CVEs, cached in Postgres for a day (`HQ_INTEL_TTL_HOURS`). Point it at a mirror with `HQ_EPSS_API` and `HQ_KEV_FEED`. A source that is down leaves Findings ranked on Engine severity rather than failing the Scan.
 
 The Gate rule is unchanged: new is what fails, at any severity. Severity ranks what to look at; scope decides what blocks. See [ADR 0023](docs/adr/0023-exploitability-intel.md).
+
+### SBOM and license policy
+
+Every Scan records what the Target depends on, so the inventory and the Findings describe the same moment:
+
+```sh
+hq sbom acme/web > acme-web.cdx.json     # CycloneDX 1.5, for the last scanned Revision
+hq license-policy --allow MIT,Apache-2.0,BSD-3-Clause --deny AGPL-3.0
+```
+
+A Target with no recorded inventory is an error rather than an empty document — an empty SBOM claims "no dependencies", which is a very different claim from "nobody has looked".
+
+A license is a decision somebody at the company makes, so HQ stores it. An **allowed** license produces no Finding at all. A **denied** one Gates like any other new Finding. A license that needs **review** — including any license nobody has ruled on, because unlisted is not consent — is reported, does not Gate, and is never agent-fixable. Nothing auto-accepts a license on a Developer's behalf. See [ADR 0026](docs/adr/0026-sbom-and-license-policy.md).
 
 ### Malicious dependencies
 

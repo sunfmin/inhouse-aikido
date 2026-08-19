@@ -10,6 +10,7 @@ pub mod malicious;
 pub mod notify;
 pub mod queue;
 pub mod remediation;
+pub mod sbom;
 pub mod scope;
 pub mod service;
 pub mod store;

@@ -50,6 +50,14 @@ pub struct Hq {
     pub advisories: Box<dyn AdvisorySource>,
 }
 
+fn list_or_dash(list: &[String]) -> String {
+    if list.is_empty() {
+        "-".to_string()
+    } else {
+        list.join(",")
+    }
+}
+
 /// One message, most urgent first, with the Fingerprint to act on.
 fn digest(target: &str, findings: &[&Finding]) -> String {
     let mut out = format!(
@@ -401,9 +409,37 @@ impl Hq {
         // Engines report a vulnerable package; the Target's manifests say
         // whether it is shipped. Read them while the workspace is still here.
         crate::scope::enrich(workspace, &mut observations);
-        // The Engines said what is broken. The inventory says what is hostile.
+        // The Engines said what is broken. The inventory says what is hostile,
+        // and is also what an SBOM is made of.
         if let Some(root) = workspace {
             observations.extend(self.malicious_observations(root));
+            let packages = crate::inventory::read(root);
+            if !packages.is_empty() {
+                let _ = self.store.record_inventory(name, &rev.0, &packages);
+            }
+        }
+        // A license an Operator has allowed is not a Finding at all. Anything
+        // else is, including a license nobody has ruled on — unlisted is not
+        // consent.
+        let policy = self.store.state.license_policy.clone();
+        observations.retain(|o| {
+            o.kind != FindingKind::License
+                || policy.rule_for(&o.problem_id) != crate::domain::LicenseRule::Allowed
+        });
+        for obs in observations.iter_mut() {
+            if obs.kind != FindingKind::License {
+                continue;
+            }
+            let rule = policy.rule_for(&obs.problem_id);
+            obs.message = format!(
+                "{} is {} by the license policy",
+                obs.problem_id,
+                rule.as_str()
+            );
+            obs.severity = match rule {
+                crate::domain::LicenseRule::Denied => Severity::High,
+                _ => Severity::Low,
+            };
         }
         let intel = self.lookup_intel(&observations);
         let validity = self.verify_secrets(name, &observations);
@@ -1226,6 +1262,7 @@ impl Hq {
             .ok_or_else(|| format!("not enrolled: {repo}"))?;
         let baseline = &target.baseline;
         let gate_dev_scope = target.gate_dev_scope;
+        let license_policy = self.store.state.license_policy.clone();
         let head_rev = Revision(head.to_string());
         let mut new_open = Vec::new();
         let mut annotations = Vec::new();
@@ -1247,7 +1284,13 @@ impl Hq {
             // still Open and still annotated — it just does not block a merge
             // nobody is any less safe for making. Neither does a credential the
             // provider has already stopped accepting.
-            let gates = (f.scope().gates() || gate_dev_scope) && !f.is_dead_secret();
+            let gates = (f.scope().gates() || gate_dev_scope)
+                && !f.is_dead_secret()
+                // A license nobody has denied is Operator work, not a merge
+                // block. Denying one is what makes it Gate.
+                && !(f.kind == FindingKind::License
+                    && license_policy.rule_for(&f.fingerprint.problem_id)
+                        != crate::domain::LicenseRule::Denied);
             // A credential somebody can use right now is an incident, not debt:
             // it blocks the merge even though it is on the Baseline.
             let live_secret = f.gates_regardless_of_baseline();
@@ -1408,6 +1451,99 @@ impl Hq {
         } else {
             Ok(out.join("\n"))
         }
+    }
+
+    /// What an Operator has decided about licenses, and how to change it.
+    pub fn license_policy(
+        &mut self,
+        allow: &[String],
+        deny: &[String],
+        review: &[String],
+        clear: bool,
+    ) -> Result<String, String> {
+        let policy = &mut self.store.state.license_policy;
+        if clear {
+            *policy = crate::domain::LicensePolicy::default();
+        }
+        for (list, added) in [
+            (&mut policy.allow, allow),
+            (&mut policy.deny, deny),
+            (&mut policy.review, review),
+        ] {
+            for license in added {
+                if !list.iter().any(|l| l.eq_ignore_ascii_case(license)) {
+                    list.push(license.clone());
+                }
+            }
+        }
+        // A license cannot be two things at once; the last word wins.
+        let denied = policy.deny.clone();
+        let allowed = policy.allow.clone();
+        if !deny.is_empty() {
+            policy
+                .allow
+                .retain(|l| !deny.iter().any(|d| d.eq_ignore_ascii_case(l)));
+            policy
+                .review
+                .retain(|l| !deny.iter().any(|d| d.eq_ignore_ascii_case(l)));
+        }
+        if !allow.is_empty() {
+            policy
+                .deny
+                .retain(|l| !allow.iter().any(|a| a.eq_ignore_ascii_case(l)));
+            policy
+                .review
+                .retain(|l| !allow.iter().any(|a| a.eq_ignore_ascii_case(l)));
+        }
+        if !review.is_empty() {
+            policy
+                .allow
+                .retain(|l| !review.iter().any(|r| r.eq_ignore_ascii_case(l)));
+            policy
+                .deny
+                .retain(|l| !review.iter().any(|r| r.eq_ignore_ascii_case(l)));
+        }
+        let _ = (denied, allowed);
+        // Sorted, so the answer does not depend on the order somebody happened
+        // to declare things in.
+        for list in [&mut policy.allow, &mut policy.deny, &mut policy.review] {
+            list.sort();
+        }
+        let policy = &self.store.state.license_policy;
+        if policy.is_empty() {
+            return Ok("no license policy: every license needs review".into());
+        }
+        Ok(format!(
+            "allow={} deny={} review={}",
+            list_or_dash(&policy.allow),
+            list_or_dash(&policy.deny),
+            list_or_dash(&policy.review)
+        ))
+    }
+
+    /// The Target's dependency inventory as CycloneDX, for its last Scan.
+    pub fn sbom(&self, target: &str) -> Result<String, String> {
+        if !self.tracks(target) {
+            return Err(format!("not enrolled: {target}"));
+        }
+        let Some((revision, packages)) = self.store.inventory(target)? else {
+            // An empty document would read as a Target with no dependencies,
+            // which is a very different claim from "nobody has looked".
+            return Err(format!(
+                "{target} has no scanned Revision with a readable dependency manifest — \
+                 run `hq scan {target}` first"
+            ));
+        };
+        let findings: Vec<&Finding> = self
+            .store
+            .state
+            .findings
+            .values()
+            .filter(|f| f.fingerprint.target == target)
+            .collect();
+        let timestamp = self.store.now_rfc3339()?;
+        let document = crate::sbom::cyclonedx(target, &revision, &timestamp, &packages, &findings);
+        serde_json::to_string_pretty(&document).map_err(|e| e.to_string())
     }
 
     pub fn github_dump(&self) -> String {
