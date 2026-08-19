@@ -55,6 +55,9 @@ pub enum Cmd {
         /// Line the Engine saw it on, for the PR annotation.
         #[arg(long)]
         line: Option<u32>,
+        /// runtime, development, or unknown (the default)
+        #[arg(long, default_value = "unknown")]
+        scope: String,
     },
     FakeFail {
         name: String,
@@ -79,6 +82,16 @@ pub enum Cmd {
         state: Option<String>,
         #[arg(long)]
         kind: Option<String>,
+        /// runtime, development, or unknown
+        #[arg(long)]
+        scope: Option<String>,
+    },
+    /// Change what a Target's Gate blocks on.
+    Policy {
+        name: String,
+        /// Fail the Gate on new development-scope Findings too. Off by default.
+        #[arg(long)]
+        gate_dev_scope: Option<bool>,
     },
     /// One Finding as JSON.
     Show {
@@ -424,7 +437,10 @@ fn dispatch(hq: &mut Hq, cmd: Cmd) -> Result<String, String> {
             manifest,
             message,
             line,
+            scope,
         } => {
+            let scope = crate::domain::Scope::parse(&scope)
+                .ok_or_else(|| format!("unknown --scope {scope}"))?;
             hq.add_fake_obs(
                 &name,
                 &revision,
@@ -438,6 +454,7 @@ fn dispatch(hq: &mut Hq, cmd: Cmd) -> Result<String, String> {
                     fixed_version: fixed,
                     message,
                     line,
+                    scope,
                 },
             );
             Ok("ok".into())
@@ -466,13 +483,32 @@ fn dispatch(hq: &mut Hq, cmd: Cmd) -> Result<String, String> {
             json,
             state,
             kind,
+            scope,
         } => {
+            if let Some(s) = scope.as_deref() {
+                crate::domain::Scope::parse(s)
+                    .ok_or_else(|| format!("unknown --scope {s}: runtime, development, unknown"))?;
+            }
             if json {
-                hq.findings_json(target.as_deref(), state.as_deref(), kind.as_deref())
+                hq.findings_json(
+                    target.as_deref(),
+                    state.as_deref(),
+                    kind.as_deref(),
+                    scope.as_deref(),
+                )
             } else {
-                Ok(hq.findings_text(target.as_deref(), state.as_deref(), kind.as_deref()))
+                Ok(hq.findings_text(
+                    target.as_deref(),
+                    state.as_deref(),
+                    kind.as_deref(),
+                    scope.as_deref(),
+                ))
             }
         }
+        Cmd::Policy {
+            name,
+            gate_dev_scope,
+        } => hq.set_policy(&name, gate_dev_scope),
         Cmd::Show { fingerprint } => {
             let fp = Fingerprint::parse(&fingerprint).ok_or("bad fingerprint")?;
             hq.show(&fp)

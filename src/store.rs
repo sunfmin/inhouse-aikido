@@ -1,6 +1,6 @@
 use crate::domain::{
-    Finding, FindingKind, FindingState, Fingerprint, Observation, Remediation, Revision, Target,
-    TargetId, TargetKind,
+    Finding, FindingKind, FindingState, Fingerprint, Observation, Remediation, Revision, Scope,
+    Target, TargetId, TargetKind,
 };
 use crate::engine::FakeEngine;
 use crate::github::{FakeGithub, Github};
@@ -120,6 +120,8 @@ ALTER TABLE observations ADD COLUMN IF NOT EXISTS line INTEGER;
 ALTER TABLE github_checks ADD COLUMN IF NOT EXISTS head_sha TEXT NOT NULL DEFAULT '';
 ALTER TABLE github_prs ADD COLUMN IF NOT EXISTS head TEXT NOT NULL DEFAULT '';
 ALTER TABLE github_prs ADD COLUMN IF NOT EXISTS base TEXT NOT NULL DEFAULT '';
+ALTER TABLE observations ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'unknown';
+ALTER TABLE targets ADD COLUMN IF NOT EXISTS gate_dev_scope BOOLEAN NOT NULL DEFAULT FALSE;
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -301,12 +303,14 @@ fn persist(tx: &mut postgres::Transaction<'_>, state: &State) -> Result<(), Stri
 
     for t in state.targets.values() {
         tx.execute(
-            "INSERT INTO targets (id, kind, default_revision, baseline_ready) VALUES ($1,$2,$3,$4)",
+            "INSERT INTO targets (id, kind, default_revision, baseline_ready, gate_dev_scope)
+             VALUES ($1,$2,$3,$4,$5)",
             &[
                 &t.id.0,
                 &kind_str(t.kind),
                 &t.default_revision.0,
                 &t.baseline_ready,
+                &t.gate_dev_scope,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -339,8 +343,8 @@ fn persist(tx: &mut postgres::Transaction<'_>, state: &State) -> Result<(), Stri
         .map_err(|e| e.to_string())?;
         for o in &f.observations {
             tx.execute(
-                "INSERT INTO observations (fp, engine, problem_id, location_key, kind, package, manifest, fixed_version, message, line)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+                "INSERT INTO observations (fp, engine, problem_id, location_key, kind, package, manifest, fixed_version, message, line, scope)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
                 &[
                     key,
                     &o.engine,
@@ -352,6 +356,7 @@ fn persist(tx: &mut postgres::Transaction<'_>, state: &State) -> Result<(), Stri
                     &o.fixed_version,
                     &o.message,
                     &o.line.map(|l| l as i32),
+                    &o.scope.as_str(),
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -404,7 +409,7 @@ fn load(client: &mut Client) -> Result<State, String> {
 
     for row in client
         .query(
-            "SELECT id, kind, default_revision, baseline_ready FROM targets",
+            "SELECT id, kind, default_revision, baseline_ready, gate_dev_scope FROM targets",
             &[],
         )
         .map_err(|e| e.to_string())?
@@ -416,6 +421,7 @@ fn load(client: &mut Client) -> Result<State, String> {
             default_revision: Revision(row.get(2)),
             baseline_ready: row.get(3),
             baseline: vec![],
+            gate_dev_scope: row.get(4),
         };
         for b in client
             .query(
@@ -458,7 +464,7 @@ fn load(client: &mut Client) -> Result<State, String> {
         };
         for o in client
             .query(
-                "SELECT engine, problem_id, location_key, kind, package, manifest, fixed_version, message, line FROM observations WHERE fp = $1",
+                "SELECT engine, problem_id, location_key, kind, package, manifest, fixed_version, message, line, scope FROM observations WHERE fp = $1",
                 &[&fp_key],
             )
             .map_err(|e| e.to_string())?
@@ -473,6 +479,7 @@ fn load(client: &mut Client) -> Result<State, String> {
                 fixed_version: o.get(6),
                 message: o.get(7),
                 line: o.get::<_, Option<i32>>(8).map(|l| l as u32),
+                scope: Scope::parse(o.get(9)).unwrap_or_default(),
             });
         }
         state.findings.insert(fp_key, finding);

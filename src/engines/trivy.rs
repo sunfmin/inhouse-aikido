@@ -97,6 +97,7 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
                     message: v.title.unwrap_or_default(),
                     // A lockfile CVE is about the entry, not a line.
                     line: None,
+                    scope: Default::default(),
                 });
             }
         }
@@ -112,6 +113,7 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
                     manifest: Some(manifest.clone()),
                     fixed_version: None,
                     message: m.title.unwrap_or_default(),
+                    scope: Default::default(),
                     line,
                 });
             }
@@ -135,6 +137,7 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
                     fixed_version: None,
                     message: lic.category.unwrap_or_default(),
                     line: None,
+                    scope: Default::default(),
                 });
             }
         }

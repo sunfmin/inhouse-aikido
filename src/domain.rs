@@ -20,6 +20,11 @@ pub struct Target {
     pub default_revision: Revision,
     pub baseline_ready: bool,
     pub baseline: Vec<Fingerprint>,
+    /// Should a new development-scope Finding fail this Target's Gate? Off by
+    /// default — the point of Scope is that build-only debt stops blocking
+    /// merges — but a Target that ships its build output can turn it on.
+    #[serde(default)]
+    pub gate_dev_scope: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -71,6 +76,45 @@ pub enum FindingKind {
     License,
 }
 
+/// Where a dependency is used. A CVE in a build-only package is real, but it is
+/// not on the path an attacker can reach, so it must not block a merge the way a
+/// runtime one does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Scope {
+    /// Shipped, reachable at run time.
+    Runtime,
+    /// Build, test, or tooling only.
+    Development,
+    /// Nobody could tell. Treated as Runtime — HQ does not de-noise on a guess.
+    #[default]
+    Unknown,
+}
+
+impl Scope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Scope::Runtime => "runtime",
+            Scope::Development => "development",
+            Scope::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Scope> {
+        match s {
+            "runtime" | "prod" | "production" => Some(Scope::Runtime),
+            "development" | "dev" => Some(Scope::Development),
+            "unknown" => Some(Scope::Unknown),
+            _ => None,
+        }
+    }
+
+    /// Does a Finding in this Scope block a merge?
+    pub fn gates(self) -> bool {
+        self != Scope::Development
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FindingState {
@@ -93,6 +137,11 @@ pub struct Observation {
     /// Fingerprint (ADR 0007) — it only decides where an annotation lands.
     #[serde(default)]
     pub line: Option<u32>,
+    /// Runtime or development dependency. Not part of the Fingerprint either: a
+    /// package that moves from `devDependencies` to `dependencies` is the same
+    /// Finding, it just starts blocking merges.
+    #[serde(default)]
+    pub scope: Scope,
 }
 
 impl Observation {
@@ -118,6 +167,28 @@ pub struct Finding {
     pub package: Option<String>,
     pub manifest: Option<String>,
     pub fixed_version: Option<String>,
+}
+
+impl Finding {
+    /// The Scope HQ acts on. A Finding is development-scope only when every
+    /// Engine that saw it said so — one Engine reporting runtime, or not
+    /// reporting at all, makes it runtime.
+    pub fn scope(&self) -> Scope {
+        if self.observations.is_empty() {
+            return Scope::Unknown;
+        }
+        if self
+            .observations
+            .iter()
+            .all(|o| o.scope == Scope::Development)
+        {
+            Scope::Development
+        } else if self.observations.iter().any(|o| o.scope == Scope::Runtime) {
+            Scope::Runtime
+        } else {
+            Scope::Unknown
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -28,6 +28,7 @@ fn secret_obs(problem: &str) -> Observation {
         fixed_version: None,
         message: "leaked key".into(),
         line: Some(7),
+        scope: Default::default(),
     }
 }
 

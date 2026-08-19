@@ -1,7 +1,7 @@
 use crate::domain::PrRequest;
 use crate::domain::{
     Annotation, CheckRun, Finding, FindingKind, FindingState, Fingerprint, Observation,
-    Remediation, Revision, Target, TargetId, TargetKind,
+    Remediation, Revision, Scope, Target, TargetId, TargetKind,
 };
 use crate::engine::{Engine, FakeEngine};
 use crate::github::Github;
@@ -91,6 +91,7 @@ impl Hq {
                 default_revision: Revision(revision.to_string()),
                 baseline_ready: false,
                 baseline: vec![],
+                gate_dev_scope: false,
             },
         );
         Ok(format!(
@@ -108,6 +109,24 @@ impl Hq {
     }
 
     /// Is this repo a Target at all? Enrollment is opt-in, so most repos are not.
+    /// What this Target's Gate blocks on. Passing nothing just reports it.
+    pub fn set_policy(
+        &mut self,
+        name: &str,
+        gate_dev_scope: Option<bool>,
+    ) -> Result<String, String> {
+        let target = self
+            .store
+            .state
+            .targets
+            .get_mut(name)
+            .ok_or_else(|| format!("not enrolled: {name}"))?;
+        if let Some(value) = gate_dev_scope {
+            target.gate_dev_scope = value;
+        }
+        Ok(format!("{name} gate_dev_scope={}", target.gate_dev_scope))
+    }
+
     pub fn tracks(&self, name: &str) -> bool {
         self.store.state.targets.contains_key(name)
     }
@@ -133,8 +152,8 @@ impl Hq {
             .values()
             .map(|t| {
                 format!(
-                    "{} kind={:?} default={} baseline_ready={}",
-                    t.id.0, t.kind, t.default_revision.0, t.baseline_ready
+                    "{} kind={:?} default={} baseline_ready={} gate_dev_scope={}",
+                    t.id.0, t.kind, t.default_revision.0, t.baseline_ready, t.gate_dev_scope
                 )
             })
             .collect();
@@ -257,6 +276,9 @@ impl Hq {
                 Err(e) => failed.push(e.engine()),
             }
         }
+        // Engines report a vulnerable package; the Target's manifests say
+        // whether it is shipped. Read them while the workspace is still here.
+        crate::scope::enrich(workspace, &mut observations);
         Ok(ScanOutcome {
             revision: rev,
             observations,
@@ -516,6 +538,7 @@ impl Hq {
         target: Option<&str>,
         state: Option<&str>,
         kind: Option<&str>,
+        scope: Option<&str>,
     ) -> Vec<&Finding> {
         let mut items: Vec<&Finding> = self
             .store
@@ -541,6 +564,7 @@ impl Hq {
                     _ => true,
                 })
             })
+            .filter(|f| scope.is_none_or(|s| Scope::parse(s) == Some(f.scope())))
             .collect();
         items.sort_by_key(|f| f.fingerprint.display());
         items
@@ -551,8 +575,9 @@ impl Hq {
         target: Option<&str>,
         state: Option<&str>,
         kind: Option<&str>,
+        scope: Option<&str>,
     ) -> String {
-        let items = self.filtered_findings(target, state, kind);
+        let items = self.filtered_findings(target, state, kind, scope);
         if items.is_empty() {
             return "no findings".into();
         }
@@ -561,10 +586,11 @@ impl Hq {
             .map(|f| {
                 let engines: Vec<&str> = f.observations.iter().map(|o| o.engine.as_str()).collect();
                 format!(
-                    "{} state={:?} kind={:?} engines={}",
+                    "{} state={:?} kind={:?} scope={} engines={}",
                     f.fingerprint.display(),
                     f.state,
                     f.kind,
+                    f.scope().as_str(),
                     engines.join(",")
                 )
             })
@@ -577,9 +603,10 @@ impl Hq {
         target: Option<&str>,
         state: Option<&str>,
         kind: Option<&str>,
+        scope: Option<&str>,
     ) -> Result<String, String> {
         let views: Vec<crate::brief::FindingView> = self
-            .filtered_findings(target, state, kind)
+            .filtered_findings(target, state, kind, scope)
             .into_iter()
             .map(crate::brief::FindingView::from_finding)
             .collect();
@@ -750,6 +777,7 @@ impl Hq {
             .get(repo)
             .ok_or_else(|| format!("not enrolled: {repo}"))?;
         let baseline = &target.baseline;
+        let gate_dev_scope = target.gate_dev_scope;
         let head_rev = Revision(head.to_string());
         let mut new_open = Vec::new();
         let mut annotations = Vec::new();
@@ -767,6 +795,10 @@ impl Hq {
                 continue;
             }
             let on_baseline = baseline.iter().any(|b| b == &f.fingerprint);
+            // A new Finding in a build-only dependency is real debt, so it is
+            // still Open and still annotated — it just does not block a merge
+            // nobody is any less safe for making.
+            let gates = f.scope().gates() || gate_dev_scope;
             let line = f.observations.iter().find_map(|o| o.line).unwrap_or(1);
             let detail = f
                 .observations
@@ -786,10 +818,24 @@ impl Hq {
                 end_line: line,
                 // Known debt is a warning; only a Finding that is new to this
                 // Target is what blocks the merge.
-                level: if on_baseline { "warning" } else { "failure" }.into(),
-                title: format!("{:?} {}", f.kind, f.fingerprint.problem_id),
+                level: if on_baseline || !gates {
+                    "warning"
+                } else {
+                    "failure"
+                }
+                .into(),
+                title: if gates {
+                    format!("{:?} {}", f.kind, f.fingerprint.problem_id)
+                } else {
+                    format!(
+                        "{:?} {} ({} dependency)",
+                        f.kind,
+                        f.fingerprint.problem_id,
+                        f.scope().as_str()
+                    )
+                },
             });
-            if !on_baseline {
+            if !on_baseline && gates {
                 new_open.push(f.fingerprint.clone());
             }
         }

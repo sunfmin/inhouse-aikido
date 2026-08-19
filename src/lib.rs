@@ -6,6 +6,7 @@ pub mod engines;
 pub mod github;
 pub mod queue;
 pub mod remediation;
+pub mod scope;
 pub mod service;
 pub mod store;
 pub mod webhook;

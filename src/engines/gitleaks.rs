@@ -37,6 +37,7 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
                 message: h.description.unwrap_or_default(),
                 // gitleaks counts from zero.
                 line: h.start_line.map(|l| l + 1),
+                scope: Default::default(),
             }
         })
         .collect())

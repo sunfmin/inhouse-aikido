@@ -253,6 +253,7 @@ fn sca(problem: &str, manifest: &str, package: &str, fixed: Option<&str>) -> Obs
         fixed_version: fixed.map(str::to_string),
         message: format!("{problem} in {package}"),
         line: None,
+        scope: Default::default(),
     }
 }
 
@@ -365,6 +366,7 @@ fn secrets_sast_and_iac_still_get_no_remediation() {
                 fixed_version: Some("1.0.0".into()),
                 message: "nope".into(),
                 line: Some(3),
+                scope: Default::default(),
             },
         );
     }

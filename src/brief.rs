@@ -9,6 +9,9 @@ pub struct FindingView {
     pub location_key: String,
     pub state: String,
     pub kind: String,
+    /// runtime, development, or unknown — development-scope Findings do not
+    /// block a merge, so an agent can leave them for later.
+    pub scope: String,
     pub engines: Vec<String>,
     pub package: Option<String>,
     pub manifest: Option<String>,
@@ -29,6 +32,7 @@ impl FindingView {
             .unwrap_or("")
             .to_string();
         Self {
+            scope: f.scope().as_str().to_string(),
             fingerprint: f.fingerprint.display(),
             target: f.fingerprint.target.clone(),
             problem_id: f.fingerprint.problem_id.clone(),

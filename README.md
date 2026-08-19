@@ -73,7 +73,8 @@ hq [OPTIONS] <COMMAND>
   unenroll      Stop tracking a Target
   targets       List Targets
   scan          Run Engines against a Target
-  findings      List Findings (text or --json, filter by --target/--state/--kind)
+  findings      List Findings (text or --json, filter by --target/--state/--kind/--scope)
+  policy        Change what a Target's Gate blocks on
   show          One Finding as JSON
   brief         Agent Brief for one Finding, or the next agent-fixable Open Finding
   dismissed     List Dismissed Findings
@@ -96,6 +97,19 @@ hq --github-backend real handle-pr acme/web --number 42 --head <sha> --base main
 ```
 
 Against the real backend the Gate is a Check Run named `hq` on the PR's head Revision: one per Revision, updated rather than restacked on the next Scan. Every Open Finding on that Revision is annotated in the file it is in — `failure` for what is new, `warning` for Baseline debt — and each annotation carries the Fingerprint and the `/hq dismiss` command for it. Engines that fail write a failed Check Run, and a Check Run HQ cannot write is an error, never a silent pass.
+
+### Dependency scope
+
+A CVE in a build-only package is real debt, but it is not on a path an attacker can reach — and blocking merges on it is how a Gate gets turned off. So HQ reads the Target's own manifests during the Scan and records whether each vulnerable package is a **runtime** or **development** dependency.
+
+A new development-scope Finding does not fail the Gate. It is still Open, still in `hq findings`, and still annotated on the PR — as a warning that says which scope it is in. De-noised, not hidden.
+
+```sh
+hq findings --scope development       # what stopped blocking merges
+hq policy acme/web --gate-dev-scope true   # a Target that ships its build output
+```
+
+Scope HQ cannot determine stays `unknown`, and unknown Gates like runtime — HQ de-noises on evidence, never on a guess. A package that is a runtime dependency anywhere in the Target is runtime everywhere in it, so a monorepo's test app cannot de-noise the API's copy of the same library. npm lockfiles (v1, v2, v3) and `package.json` are read today; other ecosystems stay unknown until they have a reader. See [ADR 0022](docs/adr/0022-dependency-scope.md).
 
 ### The GitHub App
 

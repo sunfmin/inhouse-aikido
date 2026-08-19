@@ -50,6 +50,7 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
             manifest: None,
             fixed_version: None,
             line: r.start.and_then(|p| p.line),
+            scope: Default::default(),
             message: r.extra.and_then(|e| e.message).unwrap_or_default(),
         })
         .collect())
