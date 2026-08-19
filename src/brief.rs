@@ -26,6 +26,11 @@ pub struct FindingView {
     pub fixed_version: Option<String>,
     pub last_revision: Option<String>,
     pub message: String,
+    /// For a SAST or IaC Finding: the offending line with a few lines either
+    /// side, so an agent can see what it is fixing without opening the file.
+    /// Never populated for a secret — that would put the credential in the
+    /// Brief.
+    pub snippet: Option<String>,
     pub agent_fixable: bool,
 }
 
@@ -68,6 +73,7 @@ impl FindingView {
             fixed_version: f.fixed_version.clone(),
             last_revision: f.last_revision.as_ref().map(|r| r.0.clone()),
             message,
+            snippet: f.snippet().map(str::to_string),
             agent_fixable: is_agent_fixable(f),
         }
     }
@@ -96,6 +102,14 @@ pub fn pickup_rank(f: &Finding) -> u8 {
         FindingKind::Sca => 3,
         FindingKind::Iac => 4,
         FindingKind::License => 9,
+    }
+}
+
+/// Render a captured snippet as its own fenced block, or nothing.
+fn code_block(snippet: Option<&str>) -> String {
+    match snippet {
+        Some(code) if !code.trim().is_empty() => format!("\n\n```\n{}\n```", code.trim_end()),
+        _ => String::new(),
     }
 }
 
@@ -138,22 +152,22 @@ pub fn brief_markdown(f: &Finding) -> String {
             (
                 format!("Fix SAST rule {} at {}", v.problem_id, v.location_key),
                 format!(
-                    "Opengrep reports `{}` at `{}`. {}",
-                    v.problem_id, v.location_key, hint
+                    "Opengrep reports `{}` at `{}`. {}{}",
+                    v.problem_id, v.location_key, hint, code_block(v.snippet.as_deref())
                 ),
                 "The code no longer matches the rule. Behavior stays correct. HQ SAST Scan does not report this Fingerprint as Open.".into(),
-                format!("- Location key (source file): `{}`\n- Rule: `{}`\n- Engine note: {}", v.location_key, v.problem_id, hint),
+                format!("- Location key (source file): `{}`\n- Rule: `{}`\n- Engine note: {}\n- Fix the code path the rule points at; do not add a suppression comment", v.location_key, v.problem_id, hint),
                 format!("- [ ] `{}` no longer matches `{}`\n- [ ] Existing tests for that area still pass\n- [ ] `hq scan --use opengrep` does not report Fingerprint `{}` as Open", v.location_key, v.problem_id, v.fingerprint),
-                "- Rewriting unrelated files\n- Disabling the rule globally\n- Dismissing instead of fixing".to_string(),
+                "- Rewriting unrelated files\n- Disabling the rule globally, or silencing it with a `nosem` / ignore comment\n- Dismissing instead of fixing".to_string(),
             )
         }
         FindingKind::Iac => (
             format!("Fix IaC rule {} at {}", v.problem_id, v.location_key),
-            format!("Trivy reports misconfiguration `{}` at `{}`.", v.problem_id, v.location_key),
+            format!("Trivy reports misconfiguration `{}` at `{}`. {}{}", v.problem_id, v.location_key, v.message, code_block(v.snippet.as_deref())),
             "The manifest satisfies the rule. HQ Scan does not report this Fingerprint as Open.".into(),
-            format!("- Location key: `{}`\n- Rule: `{}`", v.location_key, v.problem_id),
+            format!("- Location key: `{}`\n- Rule: `{}`\n- Change the setting the rule names; do not add an ignore annotation", v.location_key, v.problem_id),
             format!("- [ ] The IaC at `{}` no longer matches `{}`\n- [ ] `hq scan --use trivy` does not report Fingerprint `{}` as Open", v.location_key, v.problem_id, v.fingerprint),
-            "- Dismissing instead of fixing\n- Changing unrelated infrastructure".to_string(),
+            "- Dismissing instead of fixing\n- Silencing the rule with an ignore annotation instead of changing the setting\n- Changing unrelated infrastructure".to_string(),
         ),
         FindingKind::License => (
             format!("License {} at {} needs a human decision", v.problem_id, v.location_key),
@@ -208,9 +222,9 @@ pub fn brief_markdown(f: &Finding) -> String {
          **Acceptance criteria:**\n{criteria}\n\n\
          **Out of scope:**\n{out}\n\n\
          **Verify:** after the change, from the Target workspace run\n\
-         `hq scan {target} --workspace . --use gitleaks,trivy,opengrep`\n\
-         then `hq show {fp}` and confirm state is no longer Open.\n\
-         Do not `hq dismiss` this Finding.\n",
+         `hq verify '{fp}' --workspace . --use gitleaks,trivy,opengrep`\n\
+         It exits non-zero while the Finding is still Open, and tells you if\n\
+         your edit opened a new one. Do not `hq dismiss` this Finding.\n",
         cat = if f.kind == FindingKind::Secret || f.kind == FindingKind::Sast {
             "bug"
         } else {

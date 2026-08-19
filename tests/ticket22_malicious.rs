@@ -197,6 +197,7 @@ fn no_remediation_is_opened_for_a_malicious_dependency() {
             scope: hq::domain::Scope::Runtime,
             severity: hq::domain::Severity::High,
             secret: None,
+            snippet: None,
         },
     );
     let (source, _) = advisories(vec!["evil-pkg"], false);

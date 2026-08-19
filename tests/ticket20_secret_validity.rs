@@ -29,6 +29,7 @@ fn leaked(problem: &str, file: &str, value: &str) -> Observation {
         scope: Scope::Unknown,
         severity: Severity::High,
         secret: Some(LeakedSecret::new(value)),
+        snippet: None,
     }
 }
 

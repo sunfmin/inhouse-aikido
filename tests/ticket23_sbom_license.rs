@@ -39,6 +39,7 @@ fn license_obs(license: &str, package: &str) -> Observation {
         scope: Scope::Runtime,
         severity: Severity::Unknown,
         secret: None,
+        snippet: None,
     }
 }
 

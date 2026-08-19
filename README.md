@@ -257,9 +257,36 @@ hq findings --json --state open   # Open Findings, with agent_fixable flags
 hq brief                          # next agent-fixable Finding as an Agent Brief
 hq brief '<fingerprint>'          # a specific Finding as a Brief
 hq show '<fingerprint>'           # one Finding as JSON
+hq verify '<fingerprint>'         # re-run the Engines; non-zero while still Open
 ```
 
-An agent reads a Brief, implements it, re-scans the Target, and verifies the Finding is no longer Open — no dashboard involved. See [docs/agents/domain.md](docs/agents/domain.md).
+An agent reads a Brief, implements it, and asks HQ whether it worked — no dashboard involved. See [docs/agents/domain.md](docs/agents/domain.md).
+
+### Fixes HQ checks, not fixes an agent claims
+
+`hq verify` re-runs the Engines for the Finding's Target at the Revision the Finding was last seen on, and reports what is really there. It **exits non-zero while the Finding is still Open**, so an agent loop branches on an exit code rather than on its own reading of its diff:
+
+```sh
+hq brief > brief.md              # pick up work
+# ... the agent edits the tree ...
+hq verify "$FP" --workspace . --use gitleaks,trivy,opengrep || echo "not done"
+```
+
+It also names Findings the edit *opened* — a fix that removes an `eval` and shells out instead exits non-zero too, and says what it introduced. An Engine that fails is an error, not a pass: the Finding's state is left alone. What a failing verify learned is still recorded, so the Scan is never wasted.
+
+Verify asks a question and nothing more: it opens no Remediation and posts no digest.
+
+### Briefs that carry the code
+
+For SAST and IaC Findings, HQ captures the offending line with three lines either side at Scan time and renders it in the Brief, with the offending line marked:
+
+```
+>    5 |   const out = eval(req.query.cmd);
+```
+
+The agent sees what it is fixing without opening the file, and cannot mistake which line the rule meant. Silencing the rule with an ignore comment is listed under the Brief's non-goals, next to dismissing it.
+
+A secret's line is **never** captured — snippet capture is restricted to SAST and IaC by construction, so a credential cannot reach a Brief. HQ likewise opens no Remediation PR that edits source, IaC, or secrets; it only pins dependencies.
 
 ## Status
 

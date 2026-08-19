@@ -31,6 +31,7 @@ fn secret_obs(problem: &str) -> Observation {
         scope: Default::default(),
         severity: Default::default(),
         secret: None,
+        snippet: None,
     }
 }
 

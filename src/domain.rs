@@ -316,6 +316,12 @@ pub struct Observation {
     /// the Store, a log, or a dump.
     #[serde(skip)]
     pub secret: Option<LeakedSecret>,
+    /// The offending code, with a few lines either side, read at Scan time.
+    /// An agent reading a Brief has no checkout; without this it cannot see
+    /// what the rule fired on. Never captured for a secret — the point of a
+    /// secret Finding is the one line HQ must not keep.
+    #[serde(default)]
+    pub snippet: Option<String>,
 }
 
 impl Observation {
@@ -405,6 +411,11 @@ impl Finding {
     pub fn gates_regardless_of_baseline(&self) -> bool {
         self.kind == FindingKind::Malicious
             || (self.kind == FindingKind::Secret && self.validity == Validity::Active)
+    }
+
+    /// The offending code, from whichever Engine captured it.
+    pub fn snippet(&self) -> Option<&str> {
+        self.observations.iter().find_map(|o| o.snippet.as_deref())
     }
 
     pub fn is_dead_secret(&self) -> bool {

@@ -149,6 +149,22 @@ pub enum Cmd {
         #[arg(long)]
         gate_dev_scope: Option<bool>,
     },
+    /// Forget everything the fake Engine reports for a Revision.
+    FakeClear {
+        name: String,
+        revision: String,
+    },
+    /// Re-run the Engines and say whether a Finding is really gone.
+    ///
+    /// Exits non-zero while the Finding is still Open, so an agent loop can
+    /// branch on it without parsing prose.
+    Verify {
+        fingerprint: String,
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+        #[arg(long, default_value = "fake")]
+        r#use: String,
+    },
     /// One Finding as JSON.
     Show {
         fingerprint: String,
@@ -592,6 +608,7 @@ fn dispatch(hq: &mut Hq, cmd: Cmd) -> Result<String, String> {
                     scope,
                     severity,
                     secret: None,
+                    snippet: None,
                 },
             );
             Ok("ok".into())
@@ -687,6 +704,28 @@ fn dispatch(hq: &mut Hq, cmd: Cmd) -> Result<String, String> {
             name,
             gate_dev_scope,
         } => hq.set_policy(&name, gate_dev_scope),
+        Cmd::FakeClear { name, revision } => {
+            hq.clear_fake_obs(&name, &revision);
+            Ok(format!("cleared fake observations for {name}@{revision}"))
+        }
+        Cmd::Verify {
+            fingerprint,
+            workspace,
+            r#use,
+        } => {
+            let fp = Fingerprint::parse(&fingerprint).ok_or("bad fingerprint")?;
+            let names: Vec<&str> = r#use.split(',').map(str::trim).collect();
+            let verdict = hq.verify(&fp, &names, workspace.as_deref())?;
+            // What the rescan learned is worth keeping either way — a failed
+            // verify still moved the Target's state forward.
+            hq.save()?;
+            let report = verdict.report();
+            if verdict.passed() {
+                Ok(report)
+            } else {
+                Err(report)
+            }
+        }
         Cmd::Show { fingerprint } => {
             let fp = Fingerprint::parse(&fingerprint).ok_or("bad fingerprint")?;
             hq.show(&fp)

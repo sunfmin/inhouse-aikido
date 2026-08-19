@@ -50,6 +50,82 @@ pub struct Hq {
     pub advisories: Box<dyn AdvisorySource>,
 }
 
+/// What a verify run found.
+#[derive(Debug, Clone)]
+pub struct Verified {
+    pub fingerprint: String,
+    pub revision: String,
+    pub still_open: bool,
+    /// Findings that were not Open before the edit and are now. An agent loop
+    /// that only checks the named Finding calls a fix that broke something else
+    /// a success.
+    pub collateral: Vec<String>,
+}
+
+impl Verified {
+    /// Is the agent done? Not while its Finding is Open, and not while its edit
+    /// has opened something new.
+    pub fn passed(&self) -> bool {
+        !self.still_open && self.collateral.is_empty()
+    }
+
+    pub fn report(&self) -> String {
+        let mut out = if self.still_open {
+            format!("{} is still Open at {}", self.fingerprint, self.revision)
+        } else {
+            format!(
+                "{} is no longer Open at {}",
+                self.fingerprint, self.revision
+            )
+        };
+        if !self.collateral.is_empty() {
+            out.push_str(&format!(
+                "\nthe edit opened {} new Finding{}: {}",
+                self.collateral.len(),
+                if self.collateral.len() == 1 { "" } else { "s" },
+                self.collateral.join(", ")
+            ));
+        }
+        out
+    }
+}
+
+/// How many lines of context to keep either side of the offending line.
+const SNIPPET_CONTEXT: u32 = 3;
+
+/// The offending code, if HQ can find it and is allowed to keep it.
+///
+/// Never for a secret: the whole point of a secret Finding is the one line HQ
+/// must not store. Never for a dependency either — a lockfile entry is not code
+/// anybody reads.
+fn snippet_for(root: &std::path::Path, obs: &Observation) -> Option<String> {
+    if !matches!(obs.kind, FindingKind::Sast | FindingKind::Iac) {
+        return None;
+    }
+    let line = obs.line?;
+    let path = root.join(crate::domain::annotation_path(&obs.location_key));
+    let text = std::fs::read_to_string(path).ok()?;
+    let first = line.saturating_sub(SNIPPET_CONTEXT).max(1);
+    let last = line + SNIPPET_CONTEXT;
+    let body: Vec<String> = text
+        .lines()
+        .enumerate()
+        .map(|(i, l)| (i as u32 + 1, l))
+        .filter(|(n, _)| *n >= first && *n <= last)
+        .map(|(n, l)| {
+            // The offending line is marked, because "line 42" means nothing
+            // once the text is pasted into a prompt.
+            let marker = if n == line { ">" } else { " " };
+            format!("{marker} {n:>4} | {l}")
+        })
+        .collect();
+    if body.is_empty() {
+        None
+    } else {
+        Some(body.join("\n"))
+    }
+}
+
 fn list_or_dash(list: &[String]) -> String {
     if list.is_empty() {
         "-".to_string()
@@ -302,6 +378,13 @@ impl Hq {
             .push(obs);
     }
 
+    /// Forget what the fake Engine reports for a Revision — the test-harness
+    /// stand-in for an agent editing the tree.
+    pub fn clear_fake_obs(&mut self, target: &str, revision: &str) {
+        let key = FakeEngine::key(target, revision);
+        self.store.state.fake.observations.remove(&key);
+    }
+
     pub fn add_fake_fail(&mut self, target: &str, revision: &str) {
         self.store
             .state
@@ -409,6 +492,13 @@ impl Hq {
         // Engines report a vulnerable package; the Target's manifests say
         // whether it is shipped. Read them while the workspace is still here.
         crate::scope::enrich(workspace, &mut observations);
+        // And the offending code, for an agent that will read the Brief with no
+        // checkout of its own.
+        if let Some(root) = workspace {
+            for obs in observations.iter_mut() {
+                obs.snippet = snippet_for(root, obs);
+            }
+        }
         // The Engines said what is broken. The inventory says what is hostile,
         // and is also what an SBOM is made of.
         if let Some(root) = workspace {
@@ -647,6 +737,7 @@ impl Hq {
                 scope: package.scope,
                 severity: Severity::Critical,
                 secret: None,
+                snippet: None,
             });
         }
         for squat in crate::malicious::typosquats(&packages) {
@@ -669,6 +760,7 @@ impl Hq {
                 scope: package.scope,
                 severity: Severity::High,
                 secret: None,
+                snippet: None,
             });
         }
         out
@@ -1519,6 +1611,76 @@ impl Hq {
             list_or_dash(&policy.deny),
             list_or_dash(&policy.review)
         ))
+    }
+
+    /// Re-run the Engines and say whether a Finding is really gone.
+    ///
+    /// This is the other half of an agent loop: the agent edits, HQ decides.
+    /// An agent grading its own homework is how a "fix" that changed nothing
+    /// gets marked done.
+    pub fn verify(
+        &mut self,
+        fp: &Fingerprint,
+        engines: &[&str],
+        workspace: Option<&std::path::Path>,
+    ) -> Result<Verified, String> {
+        let finding = self
+            .store
+            .state
+            .finding(fp)
+            .ok_or_else(|| format!("unknown finding {}", fp.display()))?;
+        let target = fp.target.clone();
+        // The Revision the Finding was last seen on, which is what the agent
+        // has been editing.
+        let revision = finding
+            .last_revision
+            .as_ref()
+            .map(|r| r.0.clone())
+            .unwrap_or_else(|| self.store.state.targets[&target].default_revision.0.clone());
+        let open_before: std::collections::HashSet<String> = self
+            .store
+            .state
+            .findings
+            .values()
+            .filter(|f| f.fingerprint.target == target && f.state == FindingState::Open)
+            .map(|f| f.fingerprint.display())
+            .collect();
+
+        let selected = self.select_engines(engines);
+        let outcome = self.observe(&target, Some(&revision), &selected, workspace)?;
+        if !outcome.failed_engines.is_empty() {
+            return Err(format!(
+                "engines failed: {} — the Finding's state is unchanged",
+                outcome.failed_engines.join(",")
+            ));
+        }
+        // Fold the result in, but nothing else: verifying must not open a
+        // Remediation or post a digest as a side effect.
+        let rev = Revision(revision.clone());
+        self.apply_observations(&target, &rev, &outcome.observations, false);
+        self.rank_findings(&target, &outcome.intel, &outcome.validity);
+
+        let still_open = self
+            .store
+            .state
+            .finding(fp)
+            .is_some_and(|f| f.state == FindingState::Open);
+        let mut collateral: Vec<String> = self
+            .store
+            .state
+            .findings
+            .values()
+            .filter(|f| f.fingerprint.target == target && f.state == FindingState::Open)
+            .map(|f| f.fingerprint.display())
+            .filter(|key| !open_before.contains(key))
+            .collect();
+        collateral.sort();
+        Ok(Verified {
+            fingerprint: fp.display(),
+            revision,
+            still_open,
+            collateral,
+        })
     }
 
     /// The Target's dependency inventory as CycloneDX, for its last Scan.

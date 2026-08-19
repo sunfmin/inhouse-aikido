@@ -239,6 +239,7 @@ fn obs(package: &str, manifest: &str, scope: Scope) -> Observation {
         scope,
         severity: Default::default(),
         secret: None,
+        snippet: None,
     }
 }
 

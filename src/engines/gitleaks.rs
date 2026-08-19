@@ -46,6 +46,7 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
                 // not a "medium", so HQ does not pretend it is unranked.
                 severity: Severity::High,
                 secret: h.secret.filter(|s| !s.is_empty()).map(LeakedSecret::new),
+                snippet: None,
             }
         })
         .collect())

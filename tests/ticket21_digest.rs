@@ -28,6 +28,7 @@ fn cve(problem: &str, package: &str, severity: Severity) -> Observation {
         scope: Scope::Runtime,
         severity,
         secret: None,
+        snippet: None,
     }
 }
 

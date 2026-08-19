@@ -22,6 +22,6 @@ HQ Findings live in Postgres (`HQ_DATABASE_URL`, schema `hq`). An agent that sho
 2. `hq brief` — next agent-fixable Finding as an Agent Brief (secrets first, then SAST, then SCA with a known pin). Or `hq brief '<fingerprint>'`.
 3. `hq show '<fingerprint>'` — one Finding as JSON.
 4. Implement the brief. Do **not** `hq dismiss`.
-5. `hq scan <target> --workspace <clone> --use gitleaks,trivy,opengrep` then `hq show` again — state must no longer be Open.
+5. `hq verify '<fingerprint>' --workspace <clone> --use gitleaks,trivy,opengrep` — HQ re-runs the Engines and decides. It exits non-zero while the Finding is still Open, and names any Finding your edit opened. Do not call it fixed on your own reading of the diff.
 
 License Findings are Operator work. Do not auto-accept a license.

@@ -169,6 +169,7 @@ ALTER TABLE findings ADD COLUMN IF NOT EXISTS epss DOUBLE PRECISION;
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS epss_percentile DOUBLE PRECISION;
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS known_exploited BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS validity TEXT NOT NULL DEFAULT 'unverified';
+ALTER TABLE observations ADD COLUMN IF NOT EXISTS snippet TEXT;
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -644,8 +645,8 @@ fn persist(tx: &mut postgres::Transaction<'_>, state: &State) -> Result<(), Stri
         .map_err(|e| e.to_string())?;
         for o in &f.observations {
             tx.execute(
-                "INSERT INTO observations (fp, engine, problem_id, location_key, kind, package, manifest, fixed_version, message, line, scope, severity)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+                "INSERT INTO observations (fp, engine, problem_id, location_key, kind, package, manifest, fixed_version, message, line, scope, severity, snippet)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
                 &[
                     key,
                     &o.engine,
@@ -659,6 +660,7 @@ fn persist(tx: &mut postgres::Transaction<'_>, state: &State) -> Result<(), Stri
                     &o.line.map(|l| l as i32),
                     &o.scope.as_str(),
                     &o.severity.as_str(),
+                    &o.snippet,
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -789,7 +791,7 @@ fn load(client: &mut Client) -> Result<State, String> {
         };
         for o in client
             .query(
-                "SELECT engine, problem_id, location_key, kind, package, manifest, fixed_version, message, line, scope, severity FROM observations WHERE fp = $1",
+                "SELECT engine, problem_id, location_key, kind, package, manifest, fixed_version, message, line, scope, severity, snippet FROM observations WHERE fp = $1",
                 &[&fp_key],
             )
             .map_err(|e| e.to_string())?
@@ -808,6 +810,7 @@ fn load(client: &mut Client) -> Result<State, String> {
                 severity: Severity::parse(o.get(10)).unwrap_or_default(),
                 // The credential itself is never read back: it was never stored.
                 secret: None,
+                snippet: o.get(11),
             });
         }
         state.findings.insert(fp_key, finding);
