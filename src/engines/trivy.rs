@@ -56,6 +56,14 @@ pub struct TrivyMisconfig {
     pub id: String,
     #[serde(default, rename = "Title")]
     pub title: Option<String>,
+    #[serde(default, rename = "CauseMetadata")]
+    pub cause: Option<TrivyCause>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TrivyCause {
+    #[serde(default, rename = "StartLine")]
+    pub start_line: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -87,11 +95,14 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
                     manifest: Some(manifest.clone()),
                     fixed_version: fixed,
                     message: v.title.unwrap_or_default(),
+                    // A lockfile CVE is about the entry, not a line.
+                    line: None,
                 });
             }
         }
         if let Some(mis) = result.misconfigurations {
             for m in mis {
+                let line = m.cause.and_then(|c| c.start_line).filter(|l| *l > 0);
                 out.push(Observation {
                     engine: "trivy".into(),
                     problem_id: m.id,
@@ -101,6 +112,7 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
                     manifest: Some(manifest.clone()),
                     fixed_version: None,
                     message: m.title.unwrap_or_default(),
+                    line,
                 });
             }
         }
@@ -122,6 +134,7 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
                     manifest: Some(manifest.clone()),
                     fixed_version: None,
                     message: lic.category.unwrap_or_default(),
+                    line: None,
                 });
             }
         }

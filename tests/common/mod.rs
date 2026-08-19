@@ -66,3 +66,5 @@ pub fn hq_ok(ctx: &Ctx, args: &[&str]) -> String {
 pub fn binary_on_path(name: &str) -> bool {
     Command::new(name).arg("--version").output().is_ok()
 }
+
+pub mod ghstub;

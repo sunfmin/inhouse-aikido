@@ -15,7 +15,15 @@ pub struct OpengrepResult {
     pub check_id: String,
     pub path: String,
     #[serde(default)]
+    pub start: Option<OpengrepPosition>,
+    #[serde(default)]
     pub extra: Option<OpengrepExtra>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OpengrepPosition {
+    #[serde(default)]
+    pub line: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -41,6 +49,7 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
             package: None,
             manifest: None,
             fixed_version: None,
+            line: r.start.and_then(|p| p.line),
             message: r.extra.and_then(|e| e.message).unwrap_or_default(),
         })
         .collect())

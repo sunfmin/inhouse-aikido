@@ -87,6 +87,9 @@ CREATE TABLE IF NOT EXISTS fake_obs (
 CREATE TABLE IF NOT EXISTS fake_fail (
   scan_key TEXT PRIMARY KEY
 );
+-- Added after the first release; run after every CREATE above.
+ALTER TABLE observations ADD COLUMN IF NOT EXISTS line INTEGER;
+ALTER TABLE github_checks ADD COLUMN IF NOT EXISTS head_sha TEXT NOT NULL DEFAULT '';
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -228,8 +231,8 @@ fn persist(tx: &mut postgres::Transaction<'_>, state: &State) -> Result<(), Stri
         .map_err(|e| e.to_string())?;
         for o in &f.observations {
             tx.execute(
-                "INSERT INTO observations (fp, engine, problem_id, location_key, kind, package, manifest, fixed_version, message)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+                "INSERT INTO observations (fp, engine, problem_id, location_key, kind, package, manifest, fixed_version, message, line)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
                 &[
                     key,
                     &o.engine,
@@ -240,6 +243,7 @@ fn persist(tx: &mut postgres::Transaction<'_>, state: &State) -> Result<(), Stri
                     &o.manifest,
                     &o.fixed_version,
                     &o.message,
+                    &o.line.map(|l| l as i32),
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -346,7 +350,7 @@ fn load(client: &mut Client) -> Result<State, String> {
         };
         for o in client
             .query(
-                "SELECT engine, problem_id, location_key, kind, package, manifest, fixed_version, message FROM observations WHERE fp = $1",
+                "SELECT engine, problem_id, location_key, kind, package, manifest, fixed_version, message, line FROM observations WHERE fp = $1",
                 &[&fp_key],
             )
             .map_err(|e| e.to_string())?
@@ -360,6 +364,7 @@ fn load(client: &mut Client) -> Result<State, String> {
                 manifest: o.get(5),
                 fixed_version: o.get(6),
                 message: o.get(7),
+                line: o.get::<_, Option<i32>>(8).map(|l| l as u32),
             });
         }
         state.findings.insert(fp_key, finding);

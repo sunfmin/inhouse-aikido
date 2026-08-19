@@ -161,6 +161,24 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+/// The HTTP verbs HQ uses against the API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Method {
+    Get,
+    Post,
+    Patch,
+}
+
+impl Method {
+    fn as_str(self) -> &'static str {
+        match self {
+            Method::Get => "GET",
+            Method::Post => "POST",
+            Method::Patch => "PATCH",
+        }
+    }
+}
+
 #[derive(Clone)]
 struct CachedToken {
     token: String,
@@ -172,6 +190,7 @@ pub struct AppAuth {
     config: AppConfig,
     agent: ureq::Agent,
     tokens: HashMap<u64, CachedToken>,
+    installation_ids: HashMap<String, u64>,
 }
 
 impl fmt::Debug for AppAuth {
@@ -193,6 +212,7 @@ impl AppAuth {
             config,
             agent,
             tokens: HashMap::new(),
+            installation_ids: HashMap::new(),
         }
     }
 
@@ -264,33 +284,75 @@ impl AppAuth {
         Ok(page.repositories.into_iter().map(|r| r.full_name).collect())
     }
 
+    /// The installation covering a Target, resolved once and remembered.
+    pub fn installation_id_for_repo(&mut self, repo: &str) -> Result<u64, String> {
+        if let Some(id) = self.installation_ids.get(repo) {
+            return Ok(*id);
+        }
+        let id = self.installation_for_repo(repo)?.id;
+        self.installation_ids.insert(repo.to_string(), id);
+        Ok(id)
+    }
+
+    /// Call the API as the installation covering `repo`. This is how HQ does
+    /// everything it does to a Target.
+    pub fn call_for_repo(
+        &mut self,
+        repo: &str,
+        method: Method,
+        path: &str,
+        body: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, String> {
+        let installation = self.installation_id_for_repo(repo)?;
+        let token = self.installation_token(installation)?;
+        let raw = self.send(method, path, &format!("token {token}"), body)?;
+        if raw.trim().is_empty() {
+            return Ok(serde_json::Value::Null);
+        }
+        serde_json::from_str(&raw).map_err(|e| format!("unexpected {path} response: {e}"))
+    }
+
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.config.api_base.trim_end_matches('/'), path)
     }
 
     fn get(&self, path: &str, authorization: &str) -> Result<String, String> {
-        let mut res = self
-            .agent
-            .get(self.url(path))
-            .header("Authorization", authorization)
-            .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", API_VERSION)
-            .header("User-Agent", USER_AGENT)
-            .call()
-            .map_err(|e| format!("GitHub request to {path} failed: {e}"))?;
-        finish(path, &mut res)
+        self.send(Method::Get, path, authorization, None)
     }
 
     fn post(&self, path: &str, authorization: &str) -> Result<String, String> {
-        let mut res = self
-            .agent
-            .post(self.url(path))
+        self.send(Method::Post, path, authorization, None)
+    }
+
+    fn send(
+        &self,
+        method: Method,
+        path: &str,
+        authorization: &str,
+        body: Option<serde_json::Value>,
+    ) -> Result<String, String> {
+        let request = ureq::http::Request::builder()
+            .method(method.as_str())
+            .uri(self.url(path))
             .header("Authorization", authorization)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", API_VERSION)
-            .header("User-Agent", USER_AGENT)
-            .send_empty()
-            .map_err(|e| format!("GitHub request to {path} failed: {e}"))?;
+            .header("User-Agent", USER_AGENT);
+        let mut res = match body {
+            Some(json) => {
+                let payload = serde_json::to_vec(&json).map_err(|e| e.to_string())?;
+                let request = request
+                    .header("Content-Type", "application/json")
+                    .body(payload)
+                    .map_err(|e| e.to_string())?;
+                self.agent.run(request)
+            }
+            None => {
+                let request = request.body(()).map_err(|e| e.to_string())?;
+                self.agent.run(request)
+            }
+        }
+        .map_err(|e| format!("GitHub request to {path} failed: {e}"))?;
         finish(path, &mut res)
     }
 }

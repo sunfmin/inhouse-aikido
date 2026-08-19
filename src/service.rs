@@ -185,7 +185,7 @@ impl Hq {
             msg.push_str(" baseline_written");
         }
         if !is_pr && was_baseline && rev.0 == target.default_revision.0 {
-            let opened = self.maybe_remediate(name);
+            let opened = self.maybe_remediate(name)?;
             if opened > 0 {
                 msg.push_str(&format!(" remediations={opened}"));
             }
@@ -269,13 +269,18 @@ impl Hq {
         }
     }
 
-    fn maybe_remediate(&mut self, target: &str) -> usize {
+    fn maybe_remediate(&mut self, target: &str) -> Result<usize, String> {
+        // A backend that cannot open a PR opens none, rather than recording a
+        // Remediation nobody can merge.
+        if !self.github.can_open_pr() {
+            return Ok(0);
+        }
         let t = self.store.state.targets.get(target).unwrap();
         if !t.baseline_ready {
-            return 0;
+            return Ok(0);
         }
         if t.kind != TargetKind::Github {
-            return 0;
+            return Ok(0);
         }
         // Group safe pin Findings by (manifest, package, fixed_version)
         let mut groups: std::collections::HashMap<(String, String, String), Vec<Fingerprint>> =
@@ -343,7 +348,7 @@ impl Hq {
                 path: manifest.clone(),
                 content: format!("# pin {package} = {fixed}\n"),
             }];
-            let pr = self.github.open_pr(target, &title, &body, files);
+            let pr = self.github.open_pr(target, &title, &body, files)?;
             self.store.state.remediations.push(Remediation {
                 target: target.to_string(),
                 manifest,
@@ -356,9 +361,9 @@ impl Hq {
             opened += 1;
         }
         for (pr, fps) in gated {
-            let _ = self.post_gate(target, pr, &default_rev, false, &fps);
+            self.post_gate(target, pr, &default_rev, false, &fps)?;
         }
-        opened
+        Ok(opened)
     }
 
     fn filtered_findings(
@@ -562,11 +567,12 @@ impl Hq {
             let check = CheckRun {
                 repo: repo.to_string(),
                 pr,
+                head_sha: head.to_string(),
                 conclusion: "failure".into(),
                 summary: "engines failed".into(),
                 annotations: vec![],
             };
-            self.github.upsert_check(check);
+            self.github.upsert_check(check)?;
             return Ok(format!("gate=failure reason=engines_failed pr={pr}"));
         }
         let target = self
@@ -593,9 +599,27 @@ impl Hq {
                 continue;
             }
             let on_baseline = baseline.iter().any(|b| b == &f.fingerprint);
+            let line = f.observations.iter().find_map(|o| o.line).unwrap_or(1);
+            let detail = f
+                .observations
+                .first()
+                .map(|o| o.message.as_str())
+                .filter(|m| !m.is_empty())
+                .unwrap_or(&f.fingerprint.problem_id);
             annotations.push(Annotation {
                 fingerprint: f.fingerprint.display(),
-                message: format!("{:?} {}", f.kind, f.fingerprint.problem_id),
+                message: format!(
+                    "{detail}\n\nFingerprint: {}\nDismiss with: /hq dismiss {}",
+                    f.fingerprint.display(),
+                    f.fingerprint.display()
+                ),
+                path: crate::domain::annotation_path(&f.fingerprint.location_key),
+                start_line: line,
+                end_line: line,
+                // Known debt is a warning; only a Finding that is new to this
+                // Target is what blocks the merge.
+                level: if on_baseline { "warning" } else { "failure" }.into(),
+                title: format!("{:?} {}", f.kind, f.fingerprint.problem_id),
             });
             if !on_baseline {
                 new_open.push(f.fingerprint.clone());
@@ -621,10 +645,11 @@ impl Hq {
         self.github.upsert_check(CheckRun {
             repo: repo.to_string(),
             pr,
+            head_sha: head.to_string(),
             conclusion: conclusion.into(),
             summary: summary.clone(),
             annotations,
-        });
+        })?;
         Ok(format!("gate={conclusion} pr={pr} {summary}"))
     }
 

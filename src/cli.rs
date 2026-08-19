@@ -13,6 +13,10 @@ pub struct Cli {
     /// Postgres schema (isolated per test; production uses hq).
     #[arg(long, env = "HQ_SCHEMA", default_value = "hq")]
     pub schema: String,
+    /// Where the Gate, annotations, and Remediations go: `real` GitHub, or the
+    /// `fake` backend used by tests and local development.
+    #[arg(long, env = "HQ_GITHUB_BACKEND", default_value = "fake")]
+    pub github_backend: String,
     #[command(subcommand)]
     pub cmd: Cmd,
 }
@@ -48,6 +52,9 @@ pub enum Cmd {
         manifest: Option<String>,
         #[arg(long, default_value = "")]
         message: String,
+        /// Line the Engine saw it on, for the PR annotation.
+        #[arg(long)]
+        line: Option<u32>,
     },
     FakeFail {
         name: String,
@@ -148,10 +155,24 @@ where
     if let Cmd::Github { sub } = &cli.cmd {
         return github_cmd(sub);
     }
-    let mut hq = Hq::open(&cli.database_url, &cli.schema)?;
+    let mut hq = open_hq(&cli)?;
     let out = dispatch(&mut hq, cli.cmd)?;
     hq.save()?;
     Ok(out)
+}
+
+fn open_hq(cli: &Cli) -> Result<Hq, String> {
+    match cli.github_backend.as_str() {
+        "fake" => Hq::open(&cli.database_url, &cli.schema),
+        "real" | "github" => Hq::open_with_github(
+            &cli.database_url,
+            &cli.schema,
+            Box::new(crate::github::real::RealGithub::from_env()?),
+        ),
+        other => Err(format!(
+            "unknown --github-backend {other}: expected `fake` or `real`"
+        )),
+    }
 }
 
 fn github_cmd(sub: &GithubCmd) -> Result<String, String> {
@@ -242,6 +263,7 @@ fn dispatch(hq: &mut Hq, cmd: Cmd) -> Result<String, String> {
             package,
             manifest,
             message,
+            line,
         } => {
             hq.add_fake_obs(
                 &name,
@@ -255,6 +277,7 @@ fn dispatch(hq: &mut Hq, cmd: Cmd) -> Result<String, String> {
                     manifest,
                     fixed_version: fixed,
                     message,
+                    line,
                 },
             );
             Ok("ok".into())

@@ -89,6 +89,10 @@ pub struct Observation {
     pub manifest: Option<String>,
     pub fixed_version: Option<String>,
     pub message: String,
+    /// Where in the file the Engine saw it. Deliberately not part of the
+    /// Fingerprint (ADR 0007) — it only decides where an annotation lands.
+    #[serde(default)]
+    pub line: Option<u32>,
 }
 
 impl Observation {
@@ -130,15 +134,46 @@ pub struct Remediation {
 pub struct CheckRun {
     pub repo: String,
     pub pr: u64,
+    /// The Revision the Check Run is attached to. GitHub keys Check Runs on the
+    /// commit, not the PR.
+    #[serde(default)]
+    pub head_sha: String,
     pub conclusion: String,
     pub summary: String,
     pub annotations: Vec<Annotation>,
 }
 
+/// One Finding, placed in the diff where a Developer will see it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Annotation {
     pub fingerprint: String,
     pub message: String,
+    /// File the annotation lands on, derived from the Finding's location key.
+    #[serde(default)]
+    pub path: String,
+    #[serde(default = "one")]
+    pub start_line: u32,
+    #[serde(default = "one")]
+    pub end_line: u32,
+    /// `failure` for a Finding that blocks the merge, `warning` for known debt.
+    #[serde(default)]
+    pub level: String,
+    #[serde(default)]
+    pub title: String,
+}
+
+fn one() -> u32 {
+    1
+}
+
+/// The file a Finding's location key points at. Dependency locations are
+/// `manifest::package`; everything else is already a path.
+pub fn annotation_path(location_key: &str) -> String {
+    location_key
+        .split_once("::")
+        .map(|(manifest, _)| manifest)
+        .unwrap_or(location_key)
+        .to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

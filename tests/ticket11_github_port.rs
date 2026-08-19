@@ -18,20 +18,18 @@ impl Github for Recorder {
     fn backend(&self) -> &str {
         "recorder"
     }
-    fn upsert_check(&mut self, check: CheckRun) {
+    fn upsert_check(&mut self, check: CheckRun) -> Result<(), String> {
         self.checks.lock().unwrap().push(check);
+        Ok(())
     }
-    fn open_pr(&mut self, _repo: &str, _title: &str, _body: &str, _files: Vec<PrFile>) -> u64 {
-        1
-    }
-    fn last_check(&self, repo: &str, pr: u64) -> Option<CheckRun> {
-        self.checks
-            .lock()
-            .unwrap()
-            .iter()
-            .rev()
-            .find(|c| c.repo == repo && c.pr == pr)
-            .cloned()
+    fn open_pr(
+        &mut self,
+        _repo: &str,
+        _title: &str,
+        _body: &str,
+        _files: Vec<PrFile>,
+    ) -> Result<u64, String> {
+        Ok(1)
     }
     fn dump(&self) -> serde_json::Value {
         serde_json::json!({ "backend": "recorder" })

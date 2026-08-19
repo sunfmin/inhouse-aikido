@@ -12,6 +12,8 @@ pub struct GitleaksHit {
     pub file: Option<String>,
     #[serde(rename = "Description", alias = "description")]
     pub description: Option<String>,
+    #[serde(rename = "StartLine", alias = "startLine")]
+    pub start_line: Option<u32>,
 }
 
 pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError> {
@@ -33,6 +35,8 @@ pub fn observations_from_json(raw: &str) -> Result<Vec<Observation>, EngineError
                 manifest: None,
                 fixed_version: None,
                 message: h.description.unwrap_or_default(),
+                // gitleaks counts from zero.
+                line: h.start_line.map(|l| l + 1),
             }
         })
         .collect())

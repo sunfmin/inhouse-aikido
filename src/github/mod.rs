@@ -1,4 +1,5 @@
 pub mod app;
+pub mod real;
 
 use crate::domain::{CheckRun, OpenedPr, PrFile};
 use serde::{Deserialize, Serialize};
@@ -9,9 +10,21 @@ pub trait Github: Send + Sync {
     /// Human-readable name of the backend, for error messages and diagnostics.
     fn backend(&self) -> &str;
 
-    fn upsert_check(&mut self, check: CheckRun);
-    fn open_pr(&mut self, repo: &str, title: &str, body: &str, files: Vec<PrFile>) -> u64;
-    fn last_check(&self, repo: &str, pr: u64) -> Option<CheckRun>;
+    /// Write the Gate. A backend that cannot reach GitHub says so — the Gate
+    /// must never look green because the write failed.
+    fn upsert_check(&mut self, check: CheckRun) -> Result<(), String>;
+    fn open_pr(
+        &mut self,
+        repo: &str,
+        title: &str,
+        body: &str,
+        files: Vec<PrFile>,
+    ) -> Result<u64, String>;
+    /// Whether this backend can open a Remediation. False means HQ skips
+    /// Remediation rather than pretending to open one.
+    fn can_open_pr(&self) -> bool {
+        true
+    }
 
     /// What `hq github-dump` prints. A backend that talks to the real GitHub has
     /// nothing pending locally, so it says so rather than inventing an inventory.
@@ -41,13 +54,20 @@ impl Github for FakeGithub {
         "fake"
     }
 
-    fn upsert_check(&mut self, check: CheckRun) {
+    fn upsert_check(&mut self, check: CheckRun) -> Result<(), String> {
         self.checks
             .retain(|c| !(c.repo == check.repo && c.pr == check.pr));
         self.checks.push(check);
+        Ok(())
     }
 
-    fn open_pr(&mut self, repo: &str, title: &str, body: &str, files: Vec<PrFile>) -> u64 {
+    fn open_pr(
+        &mut self,
+        repo: &str,
+        title: &str,
+        body: &str,
+        files: Vec<PrFile>,
+    ) -> Result<u64, String> {
         self.next_pr += 1;
         let number = self.next_pr;
         self.prs.push(OpenedPr {
@@ -57,15 +77,7 @@ impl Github for FakeGithub {
             body: body.to_string(),
             files,
         });
-        number
-    }
-
-    fn last_check(&self, repo: &str, pr: u64) -> Option<CheckRun> {
-        self.checks
-            .iter()
-            .rev()
-            .find(|c| c.repo == repo && c.pr == pr)
-            .cloned()
+        Ok(number)
     }
 
     fn dump(&self) -> serde_json::Value {
@@ -81,8 +93,8 @@ impl Github for FakeGithub {
         for c in &self.checks {
             let ann = serde_json::to_value(&c.annotations).map_err(|e| e.to_string())?;
             tx.execute(
-                "INSERT INTO github_checks (repo, pr, conclusion, summary, annotations) VALUES ($1,$2,$3,$4,$5)",
-                &[&c.repo, &(c.pr as i64), &c.conclusion, &c.summary, &ann],
+                "INSERT INTO github_checks (repo, pr, head_sha, conclusion, summary, annotations) VALUES ($1,$2,$3,$4,$5,$6)",
+                &[&c.repo, &(c.pr as i64), &c.head_sha, &c.conclusion, &c.summary, &ann],
             )
             .map_err(|e| e.to_string())?;
         }
@@ -109,17 +121,18 @@ impl FakeGithub {
         let mut me = Self::default();
         for row in client
             .query(
-                "SELECT repo, pr, conclusion, summary, annotations FROM github_checks",
+                "SELECT repo, pr, head_sha, conclusion, summary, annotations FROM github_checks",
                 &[],
             )
             .map_err(|e| e.to_string())?
         {
-            let ann: serde_json::Value = row.get(4);
+            let ann: serde_json::Value = row.get(5);
             me.checks.push(CheckRun {
                 repo: row.get(0),
                 pr: row.get::<_, i64>(1) as u64,
-                conclusion: row.get(2),
-                summary: row.get(3),
+                head_sha: row.get(2),
+                conclusion: row.get(3),
+                summary: row.get(4),
                 annotations: serde_json::from_value(ann).unwrap_or_default(),
             });
         }

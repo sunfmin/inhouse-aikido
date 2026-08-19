@@ -86,7 +86,13 @@ hq [OPTIONS] <COMMAND>
   github-dump   Dump pending App actions (checks, PRs)
 ```
 
-Run `hq <command> --help` for details. Note `github-dump`, `handle-pr`, and `handle-comment` use a fake GitHub backend for local development; the real App wiring is in progress.
+Every command takes `--github-backend`: `fake` (the default — an in-process GitHub for tests and local development, inspected with `hq github-dump`) or `real`, which writes to GitHub as the App. Run `hq <command> --help` for details.
+
+```sh
+hq --github-backend real handle-pr acme/web --number 42 --head <sha> --base main --use trivy,gitleaks,opengrep
+```
+
+Against the real backend the Gate is a Check Run named `hq` on the PR's head Revision: one per Revision, updated rather than restacked on the next Scan. Every Open Finding on that Revision is annotated in the file it is in — `failure` for what is new, `warning` for Baseline debt — and each annotation carries the Fingerprint and the `/hq dismiss` command for it. Engines that fail write a failed Check Run, and a Check Run HQ cannot write is an error, never a silent pass. Remediation PRs against real GitHub are not wired yet.
 
 ### The GitHub App
 
